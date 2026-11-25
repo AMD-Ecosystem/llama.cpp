@@ -1,0 +1,86 @@
+// Copyright 2026 The HRX Authors
+// SPDX-License-Identifier: Apache-2.0
+
+amdgpu.target<gfx11-generic> @ggml_hc_post_target {subgroup_size = 64}
+
+config.decl @ggml.hc.tokens : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.hc.embd : %value: index where [range(%value, 1, 32768)]
+
+config.decl @ggml.hc.streams : %value: index where [range(%value, 1, 128)]
+
+config.decl @ggml.hc.identity : %value: index where [range(%value, 0, 1)]
+
+kernel.def target(@ggml_hc_post_target) export("ggml_hc_post_f32") @ggml_hc_post_f32() {
+  %one = index.constant 1 : index
+  %streams = config.get @ggml.hc.streams : index
+  %block = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %tokens = config.get @ggml.hc.tokens : index
+  %embd = config.get @ggml.hc.embd : index
+  %rows = index.mul %tokens, %streams : index
+  %count = index.mul %rows, %embd : index
+  %rounded = index.add %count, %rounding : index
+  %groups = index.div %rounded, %block : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%block, %one, %one) : index
+} launch(%input: buffer, %residual: buffer, %post: buffer, %comb: buffer, %output: buffer) {
+  %tokens = config.get @ggml.hc.tokens : index
+  %embd = config.get @ggml.hc.embd : index
+  %one = index.constant 1 : index
+  %streams = config.get @ggml.hc.streams : index
+  %zero = index.constant 0 : index
+  %zero_offset = index.constant 0 : offset
+  %input_count = index.mul %tokens, %embd : index
+  %count = index.mul %input_count, %streams : index
+  %post_count = index.mul %tokens, %streams : index
+  %x = buffer.view %input[%zero_offset] : buffer -> view<[%input_count]xf32>
+  %r = buffer.view %residual[%zero_offset] : buffer -> view<[%count]xf32>
+  %p = buffer.view %post[%zero_offset] : buffer -> view<[%post_count]xf32>
+  %y = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  %group = kernel.workgroup.id<x> : index
+  %thread = kernel.workitem.id<x> : index
+  %block = index.constant 256 : index
+  %base = index.mul %group, %block : index
+  %linear = index.add %base, %thread : index
+  %valid = index.cmp ult, %linear, %count : index
+  scf.if %valid {
+    %feature = index.rem %linear, %embd : index
+    %row = index.div %linear, %embd : index
+    %dst = index.rem %row, %streams : index
+    %token = index.div %row, %streams : index
+    %x_base = index.mul %token, %embd : index
+    %x_index = index.add %x_base, %feature : index
+    %p_base = index.mul %token, %streams : index
+    %p_index = index.add %p_base, %dst : index
+    %x_value = view.load %x[%x_index] : view<[%input_count]xf32> -> f32
+    %p_value = view.load %p[%p_index] : view<[%post_count]xf32> -> f32
+    %initial = scalar.mulf %x_value, %p_value : f32
+    %identity_mode = config.get @ggml.hc.identity : index
+    %identity = index.cmp ne, %identity_mode, %zero : index
+    %sum = scf.if %identity -> (f32) {
+      %residual_value = view.load %r[%linear] : view<[%count]xf32> -> f32
+      %result = scalar.addf %initial, %residual_value : f32
+      scf.yield %result : f32
+    } else {
+      %comb_count = index.mul %post_count, %streams : index
+      %c = buffer.view %comb[%zero_offset] : buffer -> view<[%comb_count]xf32>
+      %r_base = index.mul %p_base, %embd : index
+      %c_base = index.mul %p_base, %streams : index
+      %c_dst = index.add %c_base, %dst : index
+      %mixed = scf.for %h = [%zero to %streams step %one](%acc = %initial : f32) -> (f32) unroll {
+        %r_offset = index.mul %h, %embd : index
+        %r_row = index.add %r_base, %r_offset : index
+        %r_index = index.add %r_row, %feature : index
+        %c_offset = index.mul %h, %streams : index
+        %c_index = index.add %c_dst, %c_offset : index
+        %r_value = view.load %r[%r_index] : view<[%count]xf32> -> f32
+        %c_value = view.load %c[%c_index] : view<[%comb_count]xf32> -> f32
+        %next = scalar.fmaf %r_value, %c_value, %acc : f32
+        scf.yield %next : f32
+      }
+      scf.yield %mixed : f32
+    }
+    view.store %sum, %y[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

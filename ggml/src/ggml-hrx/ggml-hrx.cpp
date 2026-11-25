@@ -1226,6 +1226,11 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
         return source_f32 && output_f32 && source_contiguous && output_contiguous && same_shape &&
                separate_output && nonempty && bounded;
     }
+    if (op->op == GGML_OP_DSV4_HC_COMB || op->op == GGML_OP_DSV4_HC_PRE || op->op == GGML_OP_DSV4_HC_POST ||
+        op->op == GGML_OP_FILL || op->op == GGML_OP_SUM || op->op == GGML_OP_ROPE_BACK ||
+        op->op == GGML_OP_TOP_K || op->op == GGML_OP_ARGMAX || op->op == GGML_OP_LIGHTNING_INDEXER) {
+        return ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
+    }
     const bool supported_binary = supported_binary_f32_tensor(op);
     if (supported_binary) {
         return true;

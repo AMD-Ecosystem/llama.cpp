@@ -1,0 +1,76 @@
+config.decl @ggml.concat_packed.lhs_chunk : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.concat_packed.rhs_chunk : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.concat_packed.lhs_span : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.concat_packed.rhs_span : %value: index where [range(%value, 1, 134217728)]
+
+config.decl @ggml.concat_packed.element_bits : %v: index where [range(%v, 16, 32)]
+
+kernel.def @ggml_concat_packed(%element_count: index) {
+  %one = index.constant 1 : index
+  %group = index.constant 256 : index
+  %pad = index.constant 255 : index
+  %padded = index.add %element_count, %pad : index
+  %groups = index.div %padded, %group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%group, %one, %one) : index
+} launch(%element_count: index, %lhs: buffer, %rhs: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %group = kernel.workgroup.id<x> : index
+  %lane = kernel.workitem.id<x> : index
+  %group_size = index.constant 256 : index
+  %linear0 = index.madd %group, %group_size, %lane : index
+  %valid = index.cmp ult, %linear0, %count : index
+  scf.if %valid {
+    %linear, %extent = index.assume %linear0, %count [range(%linear0, 0, 134217727), lt(%linear0, %count)] : index, index
+    %zero = index.constant 0 : offset
+    %lc = config.get @ggml.concat_packed.lhs_chunk : index
+    %rc = config.get @ggml.concat_packed.rhs_chunk : index
+    %ls = config.get @ggml.concat_packed.lhs_span : index
+    %rs = config.get @ggml.concat_packed.rhs_span : index
+    %chunk = index.add %lc, %rc : index
+    %within = index.rem %linear, %chunk : index
+    %batch = index.div %linear, %chunk : index
+    %is_left = index.cmp ult, %within, %lc : index
+    %bits = config.get @ggml.concat_packed.element_bits : index
+    %bits16 = index.constant 16 : index
+    %is16 = index.cmp eq, %bits, %bits16 : index
+    scf.if %is16 {
+      %yv = buffer.view %output[%zero] : buffer -> view<[%count]xi16>
+      %value = scf.if %is_left -> (i16) {
+        %pos0 = index.madd %batch, %lc, %within : index
+        %pos, %span = index.assume %pos0, %ls [range(%pos0, 0, 134217727), lt(%pos0, %ls)] : index, index
+        %lv = buffer.view %lhs[%zero] : buffer -> view<[%ls]xi16>
+        %v = view.load %lv[%pos] : view<[%ls]xi16> -> i16
+        scf.yield %v : i16
+      } else {
+        %right = index.sub %within, %lc : index
+        %pos0 = index.madd %batch, %rc, %right : index
+        %pos, %span = index.assume %pos0, %rs [range(%pos0, 0, 134217727), lt(%pos0, %rs)] : index, index
+        %rv = buffer.view %rhs[%zero] : buffer -> view<[%rs]xi16>
+        %v = view.load %rv[%pos] : view<[%rs]xi16> -> i16
+        scf.yield %v : i16
+      }
+      view.store %value, %yv[%linear] : i16, view<[%count]xi16>
+    } else {
+      %yv = buffer.view %output[%zero] : buffer -> view<[%count]xi32>
+      %value = scf.if %is_left -> (i32) {
+        %pos0 = index.madd %batch, %lc, %within : index
+        %pos, %span = index.assume %pos0, %ls [range(%pos0, 0, 134217727), lt(%pos0, %ls)] : index, index
+        %lv = buffer.view %lhs[%zero] : buffer -> view<[%ls]xi32>
+        %v = view.load %lv[%pos] : view<[%ls]xi32> -> i32
+        scf.yield %v : i32
+      } else {
+        %right = index.sub %within, %lc : index
+        %pos0 = index.madd %batch, %rc, %right : index
+        %pos, %span = index.assume %pos0, %rs [range(%pos0, 0, 134217727), lt(%pos0, %rs)] : index, index
+        %rv = buffer.view %rhs[%zero] : buffer -> view<[%rs]xi32>
+        %v = view.load %rv[%pos] : view<[%rs]xi32> -> i32
+        scf.yield %v : i32
+      }
+      view.store %value, %yv[%linear] : i32, view<[%count]xi32>
+    }
+  }
+  kernel.return
+}

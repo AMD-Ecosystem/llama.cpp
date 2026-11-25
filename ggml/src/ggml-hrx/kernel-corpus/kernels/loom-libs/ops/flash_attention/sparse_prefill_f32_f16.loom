@@ -1,0 +1,40 @@
+amdgpu.target<gfx11-generic> @ggml_sparse_attention_wave64 {subgroup_size = 64}
+
+config.decl @ggml.sparse_attention.capacity : %value: index where [range(%value, 64, 2048), multiple_of(%value, 64)]
+
+template.decl @ggml.flash_attention.prefill.body(%publish_f16: i1, %initial_max: f32, %initial_sum: f32, %query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %gate: buffer, %output: buffer, %f16_output: buffer, %query_tile: index, %query_head0: index, %output_group0: index, %query_offset: offset, %key_offset: offset, %value_offset: offset, %mask_offset: offset, %output_offset: offset, %f16_output_offset: offset)
+
+// Each query owns a compact K/V set. Adjacent workgroups reuse that set across
+// four groups of sixteen heads and two output-channel groups.
+kernel.def target(@ggml_sparse_attention_wave64) @ggml_sparse_prefill_f32_f16(%query_count: index) {
+  %one = index.constant 1 : index
+  %eight = index.constant 8 : index
+  %threads = index.constant 256 : index
+  kernel.launch.config workgroups(%eight, %query_count, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%query_count: index, %query: buffer, %key: buffer, %mask: buffer, %sink: buffer, %output: buffer) {
+  %nq = index.assume %query_count [range(%query_count, 1, 2048)] : index
+  %row0 = kernel.workgroup.id<y> : index
+  %row = index.assume %row0 [lt(%row0, %nq)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 7)] : index
+  %zero = index.constant 0 : index
+  %four = index.constant 4 : index
+  %sixteen = index.constant 16 : index
+  %zero_offset = index.constant 0 : offset
+  %query_stride = index.constant 131072 : offset
+  %key_row_bytes = index.constant 1024 : offset
+  %half_bytes = index.constant 2 : offset
+  %capacity = config.get @ggml.sparse_attention.capacity : index
+  %key_stride = index.scale %capacity, %key_row_bytes : index, offset -> offset
+  %mask_stride = index.scale %capacity, %half_bytes : index, offset -> offset
+  %query_offset = index.scale %row, %query_stride : index, offset -> offset
+  %key_offset = index.scale %row, %key_stride : index, offset -> offset
+  %mask_offset = index.scale %row, %mask_stride : index, offset -> offset
+  %head = index.rem %group, %four : index
+  %output_group = index.div %group, %four : index
+  %publish_f16 = scalar.constant false : i1
+  %initial_max = scalar.constant 0.0 : f32
+  %initial_sum = scalar.constant 1.0 : f32
+  template.apply<@ggml.flash_attention.prefill.body>(%publish_f16, %initial_max, %initial_sum, %sixteen, %capacity, %query, %key, %key, %mask, %sink, %output, %output, %zero, %head, %output_group, %query_offset, %key_offset, %key_offset, %mask_offset, %query_offset, %zero_offset) : (i1, f32, f32, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer, index, index, index, offset, offset, offset, offset, offset, offset)
+  kernel.return
+}

@@ -1,0 +1,147 @@
+func.decl @ggml_mxfp4_decode_scale(%scale_byte: i8) -> (f32)
+
+func.def inline @ggml_mxfp4_prefetch_panel(%weight_noalias: buffer, %input_noalias: buffer, %route_stage: buffer, %expert_byte_base: offset, %weight_row_bytes: offset, %channel_tile_base: index, %bounded_output_size: index, %quant_groups: index, %load_row: index, %load_k: index, %weight_klo: index, %bounded_route_count: index, %bounded_input_route_count: index, %block_base: index) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %zero_offset = index.constant 0 : offset
+  %one_byte = index.constant 1 : offset
+  %c17_bytes = index.constant 17 : offset
+  %header_bytes = index.constant 16 : offset
+  %group_bytes = index.constant 144 : offset
+  %zi8 = scalar.constant 0 : i32
+  %zh = scalar.constant 0 : i32
+  %zi32 = scalar.constant 0 : i32
+  %z4 = scalar.constant 0 : i32
+  %z8 = vector.splati 0 : vector<2xi32>
+  %route_view = buffer.view %route_stage[%zero_offset] : buffer -> view<32xi32>
+  %zero_wp = vector.splati 0 : vector<2x4xi32>
+  %zero_we = vector.splati 0 : vector<2x4xi32>
+  %zero_ap = vector.splati 0 : vector<2x2x2xi32>
+  %zero_ad = vector.splati 0 : vector<2x2xi32>
+  %out_wp, %out_we, %out_ap, %out_ad = scf.for %ks = [%c0 to %c2 step %c1](%bank_wp = %zero_wp : vector<2x4xi32>, %bank_we = %zero_we : vector<2x4xi32>, %bank_ap = %zero_ap : vector<2x2x2xi32>, %bank_ad = %zero_ad : vector<2x2xi32>) -> (vector<2x4xi32>, vector<2x4xi32>, vector<2x2x2xi32>, vector<2x2xi32>) unroll {
+    %block = index.add %block_base, %ks : index
+    %bo = index.scale %block, %c17_bytes : index, offset -> offset
+    %next_wp, %next_we = scf.for %slot = [%c0 to %c4 step %c1](%pw = %bank_wp : vector<2x4xi32>, %pe = %bank_we : vector<2x4xi32>) -> (vector<2x4xi32>, vector<2x4xi32>) unroll {
+      %row = index.madd %slot, %c16, %load_row : index
+      %channel = index.add %channel_tile_base, %row : index
+      %valid = index.cmp ult, %channel, %bounded_output_size : index
+      %co = index.scale %channel, %weight_row_bytes : index, offset -> offset
+      %ro = index.add %expert_byte_base, %co : offset
+      %wb = index.add %ro, %bo : offset
+      %pb = index.add %wb, %one_byte : offset
+      %sv = buffer.view %weight_noalias[%wb] : buffer -> view<4xi8>
+      %qv = buffer.view %weight_noalias[%pb] : buffer -> view<16xi8>
+      %eb = vector.load %sv[%c0] : view<4xi8> -> vector<4xi8>
+      %ew = vector.bitcast %eb : vector<4xi8> to vector<1xi32>
+      %e = vector.extract %ew[%c0] : vector<1xi32> -> i32
+      %qb = vector.load %qv[%weight_klo] : view<16xi8> -> vector<4xi8>
+      %qw = vector.bitcast %qb : vector<4xi8> to vector<1xi32>
+      %q = vector.extract %qw[%c0] : vector<1xi32> -> i32
+      %payload = scalar.ori %q, %zi32 : i32
+      %exponent = scalar.ori %e, %zi32 : i32
+      %nw = vector.insert %payload into %pw[%ks, %slot] : i32, vector<2x4xi32>
+      %ne = vector.insert %exponent into %pe[%ks, %slot] : i32, vector<2x4xi32>
+      scf.yield %nw, %ne : vector<2x4xi32>, vector<2x4xi32>
+    }
+    %next_ap, %next_ad = scf.for %slot = [%c0 to %c2 step %c1](%pa = %bank_ap : vector<2x2x2xi32>, %pd = %bank_ad : vector<2x2xi32>) -> (vector<2x2x2xi32>, vector<2x2xi32>) unroll {
+      %row0 = index.madd %slot, %c16, %load_row : index
+      %row = index.assume %row0 [range(%row0, 0, 31)] : index
+      %assignment_i32 = view.load %route_view[%row] : view<32xi32> -> i32
+      %valid = scalar.cmpi sge, %assignment_i32, %zi32 : i32
+      %safe_assignment = scf.select %valid, %assignment_i32, %zi32 : i32
+      %assignment = index.cast %safe_assignment : i32 to index
+      %token = index.div %assignment, %bounded_route_count : index
+      %route = index.rem %assignment, %bounded_route_count : index
+      %input_route = index.rem %route, %bounded_input_route_count : index
+      %input_row = index.madd %token, %bounded_input_route_count, %input_route : index
+      %groups_per_row = index.div %quant_groups, %c4 : index
+      %group = index.div %block, %c4 : index
+      %local_block = index.rem %block, %c4 : index
+      %global_group = index.madd %input_row, %groups_per_row, %group : index
+      %group_offset = index.scale %global_group, %group_bytes : index, offset -> offset
+      %pb = index.add %group_offset, %header_bytes : offset
+      %payload_i = index.madd %local_block, %c32, %load_k : index
+      %ds_i = index.mul %local_block, %c2 : index
+      %iv = buffer.view %input_noalias[%pb] : buffer -> view<128xi8>
+      %dv = buffer.view %input_noalias[%group_offset] : buffer -> view<8xf16>
+      %vb = vector.load %iv[%payload_i] : view<128xi8> -> vector<8xi8>
+      %v = vector.bitcast %vb : vector<8xi8> to vector<2xi32>
+      %dh = vector.load %dv[%ds_i] : view<8xf16> -> vector<2xf16>
+      %dw = vector.bitcast %dh : vector<2xf16> to vector<1xi32>
+      %d = vector.extract %dw[%c0] : vector<1xi32> -> i32
+      %payload = vector.bitcast %v : vector<2xi32> to vector<2xi32>
+      %scale = scalar.ori %d, %zi32 : i32
+      %na = vector.insert %payload into %pa[%ks, %slot] : vector<2xi32>, vector<2x2x2xi32>
+      %nd = vector.insert %scale into %pd[%ks, %slot] : i32, vector<2x2xi32>
+      scf.yield %na, %nd : vector<2x2x2xi32>, vector<2x2xi32>
+    }
+    scf.yield %next_wp, %next_we, %next_ap, %next_ad : vector<2x4xi32>, vector<2x4xi32>, vector<2x2x2xi32>, vector<2x2xi32>
+  }
+  %c3 = index.constant 3 : index
+  %ret_wp00 = vector.extract %out_wp[%c0, %c0] : vector<2x4xi32> -> i32
+  %ret_wp01 = vector.extract %out_wp[%c0, %c1] : vector<2x4xi32> -> i32
+  %ret_wp02 = vector.extract %out_wp[%c0, %c2] : vector<2x4xi32> -> i32
+  %ret_wp03 = vector.extract %out_wp[%c0, %c3] : vector<2x4xi32> -> i32
+  %ret_wp10 = vector.extract %out_wp[%c1, %c0] : vector<2x4xi32> -> i32
+  %ret_wp11 = vector.extract %out_wp[%c1, %c1] : vector<2x4xi32> -> i32
+  %ret_wp12 = vector.extract %out_wp[%c1, %c2] : vector<2x4xi32> -> i32
+  %ret_wp13 = vector.extract %out_wp[%c1, %c3] : vector<2x4xi32> -> i32
+  %ret_we00 = vector.extract %out_we[%c0, %c0] : vector<2x4xi32> -> i32
+  %ret_we01 = vector.extract %out_we[%c0, %c1] : vector<2x4xi32> -> i32
+  %ret_we02 = vector.extract %out_we[%c0, %c2] : vector<2x4xi32> -> i32
+  %ret_we03 = vector.extract %out_we[%c0, %c3] : vector<2x4xi32> -> i32
+  %ret_we10 = vector.extract %out_we[%c1, %c0] : vector<2x4xi32> -> i32
+  %ret_we11 = vector.extract %out_we[%c1, %c1] : vector<2x4xi32> -> i32
+  %ret_we12 = vector.extract %out_we[%c1, %c2] : vector<2x4xi32> -> i32
+  %ret_we13 = vector.extract %out_we[%c1, %c3] : vector<2x4xi32> -> i32
+  %ret_ap000 = vector.extract %out_ap[%c0, %c0, %c0] : vector<2x2x2xi32> -> i32
+  %ret_ap001 = vector.extract %out_ap[%c0, %c0, %c1] : vector<2x2x2xi32> -> i32
+  %ret_ap010 = vector.extract %out_ap[%c0, %c1, %c0] : vector<2x2x2xi32> -> i32
+  %ret_ap011 = vector.extract %out_ap[%c0, %c1, %c1] : vector<2x2x2xi32> -> i32
+  %ret_ap100 = vector.extract %out_ap[%c1, %c0, %c0] : vector<2x2x2xi32> -> i32
+  %ret_ap101 = vector.extract %out_ap[%c1, %c0, %c1] : vector<2x2x2xi32> -> i32
+  %ret_ap110 = vector.extract %out_ap[%c1, %c1, %c0] : vector<2x2x2xi32> -> i32
+  %ret_ap111 = vector.extract %out_ap[%c1, %c1, %c1] : vector<2x2x2xi32> -> i32
+  %ret_ad00 = vector.extract %out_ad[%c0, %c0] : vector<2x2xi32> -> i32
+  %ret_ad01 = vector.extract %out_ad[%c0, %c1] : vector<2x2xi32> -> i32
+  %ret_ad10 = vector.extract %out_ad[%c1, %c0] : vector<2x2xi32> -> i32
+  %ret_ad11 = vector.extract %out_ad[%c1, %c1] : vector<2x2xi32> -> i32
+  func.return %ret_wp00, %ret_wp01, %ret_wp02, %ret_wp03, %ret_wp10, %ret_wp11, %ret_wp12, %ret_wp13, %ret_we00, %ret_we01, %ret_we02, %ret_we03, %ret_we10, %ret_we11, %ret_we12, %ret_we13, %ret_ap000, %ret_ap001, %ret_ap010, %ret_ap011, %ret_ap100, %ret_ap101, %ret_ap110, %ret_ap111, %ret_ad00, %ret_ad01, %ret_ad10, %ret_ad11 : i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32
+}
+
+func.def inline @ggml_mxfp4_preloaded_i8_packet(%p: vector<4xi8>, %scale_byte: i8) -> (vector<4xi8>, vector<4xi8>, f32) {
+  %scale_raw = func.call @ggml_mxfp4_decode_scale(%scale_byte) : (i8) -> (f32)
+  %half = scalar.constant 0.5 : f32
+  %scale = scalar.mulf %scale_raw, %half : f32
+  %pw = vector.bitcast %p : vector<4xi8> to vector<1xi32>
+  %s4 = vector.splati 4 : vector<1xi32>
+  %mask = vector.splati 15 : vector<4xi8>
+  %hiw = vector.shrui %pw, %s4 : vector<1xi32>
+  %hib = vector.bitcast %hiw : vector<1xi32> to vector<4xi8>
+  %li = vector.andi %p, %mask : vector<4xi8>
+  %hi = vector.andi %hib, %mask : vector<4xi8>
+  %c0 = scalar.constant 0 : i8
+  %c1 = scalar.constant 1 : i8
+  %c2 = scalar.constant 2 : i8
+  %c3 = scalar.constant 3 : i8
+  %c4 = scalar.constant 4 : i8
+  %c5 = scalar.constant 6 : i8
+  %c6 = scalar.constant 8 : i8
+  %c7 = scalar.constant 12 : i8
+  %c8 = scalar.constant 0 : i8
+  %c9 = scalar.constant -1 : i8
+  %c10 = scalar.constant -2 : i8
+  %c11 = scalar.constant -3 : i8
+  %c12 = scalar.constant -4 : i8
+  %c13 = scalar.constant -6 : i8
+  %c14 = scalar.constant -8 : i8
+  %c15 = scalar.constant -12 : i8
+  %table = vector.from_elements %c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7, %c8, %c9, %c10, %c11, %c12, %c13, %c14, %c15 : vector<16xi8>
+  %lv = vector.table.lookup %table[%li] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  %hv = vector.table.lookup %table[%hi] : vector<16xi8>, vector<4xi8> -> vector<4xi8>
+  func.return %lv, %hv, %scale : vector<4xi8>, vector<4xi8>, f32
+}

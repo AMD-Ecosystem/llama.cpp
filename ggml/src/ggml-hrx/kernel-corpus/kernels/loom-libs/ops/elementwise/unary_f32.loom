@@ -35,3 +35,44 @@ kernel.def target(@ggml_unary_f32_gfx11_wave64) export("ggml_unary_f32") @ggml_u
   }
   kernel.return
 }
+
+kernel.def target(@ggml_unary_f32_gfx11_wave64) export("ggml_softplus_f32") @ggml_softplus_f32(%element_count: index) {
+  %one = index.constant 1 : index
+  %twofiftysix = index.constant 256 : index
+  %rounding = index.constant 255 : index
+  %rounded = index.add %element_count, %rounding : index
+  %workgroup_count = index.div %rounded, %twofiftysix : index
+  kernel.launch.config workgroups(%workgroup_count, %one, %one) workgroup_size(%twofiftysix, %one, %one) : index
+} launch(%element_count: index, %input: buffer, %output: buffer) {
+  %count = index.assume %element_count [range(%element_count, 1, 134217728)] : index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %twofiftysix = index.constant 256 : index
+  %base0 = index.mul %workgroup, %twofiftysix : index
+  %linear0 = index.add %base0, %workitem : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 134217983)] : index
+  %in_bounds = index.cmp ult, %linear, %count : index
+  %zero_offset = index.constant 0 : offset
+  %input_view = buffer.view %input[%zero_offset] : buffer -> view<[%count]xf32>
+  %output_view = buffer.view %output[%zero_offset] : buffer -> view<[%count]xf32>
+  scf.if %in_bounds {
+    %value = view.load %input_view[%linear] : view<[%count]xf32> -> f32
+    %zero = scalar.constant 0.0 : f32
+    %positive = scalar.maxnumf %value, %zero : f32
+    %absolute = scalar.absf %value : f32
+    %negative = scalar.negf %absolute : f32
+    %exp = scalar.expf<afn> %negative : f32
+    %one_f32 = scalar.constant 1.0 : f32
+    %sum = scalar.addf %one_f32, %exp : f32
+    %delta = scalar.subf %sum, %one_f32 : f32
+    %tiny = scalar.cmpf oeq, %sum, %one_f32 : f32
+    %denominator = scf.select %tiny, %one_f32, %delta : f32
+    %ratio = scalar.divf %exp, %denominator : f32
+    %log = scalar.logf<afn> %sum : f32
+    %compensated = scalar.mulf %log, %ratio : f32
+    %correction = scf.select %tiny, %exp, %compensated : f32
+    %result = scalar.addf %positive, %correction : f32
+    view.store %result, %output_view[%linear] : f32, view<[%count]xf32>
+  }
+  kernel.return
+}

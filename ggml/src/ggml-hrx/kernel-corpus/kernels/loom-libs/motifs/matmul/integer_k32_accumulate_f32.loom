@@ -1,3 +1,6 @@
+// Q8_0 rounds the weight-scaled integer dot before applying the activation scale.
+config.def @ggml.matmul.integer_k32.weight_scale_first = 0 : index
+
 // Accumulate one K32 group into a 16x16 F32 result fragment. Callers own
 // decoding, memory transfers and scheduling. LHS is signed i8; RHS carries
 // its i8/u8 fragment schema. Scales, sums and corrections use result-fragment
@@ -12,6 +15,16 @@ template.def<@ggml.matmul.integer_k32.accumulate_f32> device @ggml_matmul_intege
   %product_scale = vector.mulf %activation_scale, %weight_scale : vector<8xf32>
   %affine_base = vector.fmaf %activation_sum, %weight_correction, %accumulator : vector<8xf32>
   %base = scf.select %signed_rhs, %accumulator, %affine_base : vector<8xf32>
-  %result = vector.fmaf %dot_f32, %product_scale, %base : vector<8xf32>
+  %default_sum = vector.fmaf %dot_f32, %product_scale, %base : vector<8xf32>
+  %order = config.get @ggml.matmul.integer_k32.weight_scale_first : index
+  %c0 = index.constant 0 : index
+  %weight_first = index.cmp ne, %order, %c0 : index
+  %result = scf.if %weight_first -> (vector<8xf32>) {
+    %weighted_dot = vector.mulf %dot_f32, %weight_scale : vector<8xf32>
+    %sum = vector.fmaf %weighted_dot, %activation_scale, %base : vector<8xf32>
+    scf.yield %sum : vector<8xf32>
+  } else {
+    scf.yield %default_sum : vector<8xf32>
+  }
   template.return %result : vector<8xf32>
 }

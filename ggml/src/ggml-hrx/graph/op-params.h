@@ -25,6 +25,7 @@ struct FlashAttnExtParams {
     float     max_bias      = 0.0f;
     float     logit_softcap = 0.0f;
     ggml_prec prec          = GGML_PREC_UNDEFINED;
+    int32_t   n_kv_max      = 0;
 };
 
 struct SoftMaxParams {
@@ -41,6 +42,20 @@ struct ClampParams {
     float max = 0.0f;
 };
 
+struct FillParams {
+    float value = 0.0f;
+};
+
+struct HyperConnectionCombParams {
+    float   eps    = 0.0f;
+    int32_t n_iter = 0;
+};
+
+struct HyperConnectionPreParams {
+    float scale = 1.0f;
+    bool  gated = false;
+};
+
 struct Pool1DParams {
     ggml_op_pool op = GGML_OP_POOL_MAX;
     int32_t      kernel = 0;
@@ -51,6 +66,7 @@ struct Pool1DParams {
 struct GluParams {
     ggml_glu_op op = GGML_GLU_OP_REGLU;
     bool        swapped = false;
+    float       limit   = 0.0f;
 };
 
 struct ScaleParams {
@@ -134,6 +150,9 @@ using OpParams = std::variant<
     SoftMaxParams,
     ArgsortParams,
     ClampParams,
+    FillParams,
+    HyperConnectionCombParams,
+    HyperConnectionPreParams,
     Pool1DParams,
     GluParams,
     ScaleParams,

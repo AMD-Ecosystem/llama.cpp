@@ -1,0 +1,81 @@
+// Normalized Sylvester transform, using the caller's Hadamard semantic hint.
+// Four rows per workgroup; one wave keeps all 128 row values in registers.
+amdgpu.target<gfx11-generic> @ggml_hadamard_wave32 {subgroup_size = 32}
+
+func.def inline @ggml_hadamard_butterfly(%value: f32, %lane: i32, %mask: i32) -> (f32) {
+  %width = scalar.constant 32 : i32
+  %zero = scalar.constant 0 : i32
+  %peer, %valid = kernel.subgroup.shuffle<xor> %value, %mask, %width : f32, i32, i32
+  %bit = scalar.andi %lane, %mask : i32
+  %left = scalar.cmpi eq, %bit, %zero : i32
+  %sum = scalar.addf %value, %peer : f32
+  %difference = scalar.subf %peer, %value : f32
+  %result = scf.select %left, %sum, %difference : f32
+  func.return %result : f32
+}
+
+kernel.def target(@ggml_hadamard_wave32) @ggml_hadamard_128_f32(%row_count: index) {
+  %one = index.constant 1 : index
+  %four = index.constant 4 : index
+  %three = index.constant 3 : index
+  %size = index.constant 128 : index
+  %padded = index.add %row_count, %three : index
+  %groups = index.div %padded, %four : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%size, %one, %one) : index
+} launch(%row_count: index, %input: buffer, %output: buffer) {
+  %rows = index.assume %row_count [range(%row_count, 1, 1048576)] : index
+  %group = kernel.workgroup.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c96 = index.constant 96 : index
+  %zero_offset = index.constant 0 : offset
+  %one_bit = scalar.constant 1 : i32
+  %scale = scalar.constant 0.088388347648318447 : f32
+  %row0 = index.madd %group, %c4, %subgroup : index
+  %active = index.cmp ult, %row0, %rows : index
+  scf.if %active {
+    %row = index.assume %row0 [lt(%row0, %rows)] : index
+    %i1 = index.add %lane, %c32 : index
+    %i2 = index.add %lane, %c64 : index
+    %i3 = index.add %lane, %c96 : index
+    %lane_i32 = index.cast %lane : index to i32
+    %x = buffer.view %input[%zero_offset] : buffer -> view<[%rows]x128xf32>
+    %y = buffer.view %output[%zero_offset] : buffer -> view<[%rows]x128xf32>
+    %x0 = view.load %x[%row, %lane] : view<[%rows]x128xf32> -> f32
+    %x1 = view.load %x[%row, %i1] : view<[%rows]x128xf32> -> f32
+    %x2 = view.load %x[%row, %i2] : view<[%rows]x128xf32> -> f32
+    %x3 = view.load %x[%row, %i3] : view<[%rows]x128xf32> -> f32
+    %r0, %r1, %r2, %r3 = scf.for %stage = [%c0 to %c5 step %c1](%v0 = %x0 : f32, %v1 = %x1 : f32, %v2 = %x2 : f32, %v3 = %x3 : f32) -> (f32, f32, f32, f32) unroll {
+      %shift = index.cast %stage : index to i32
+      %mask = scalar.shli %one_bit, %shift : i32
+      %n0 = func.call @ggml_hadamard_butterfly(%v0, %lane_i32, %mask) : (f32, i32, i32) -> (f32)
+      %n1 = func.call @ggml_hadamard_butterfly(%v1, %lane_i32, %mask) : (f32, i32, i32) -> (f32)
+      %n2 = func.call @ggml_hadamard_butterfly(%v2, %lane_i32, %mask) : (f32, i32, i32) -> (f32)
+      %n3 = func.call @ggml_hadamard_butterfly(%v3, %lane_i32, %mask) : (f32, i32, i32) -> (f32)
+      scf.yield %n0, %n1, %n2, %n3 : f32, f32, f32, f32
+    }
+    %a0 = scalar.addf %r0, %r1 : f32
+    %a1 = scalar.subf %r0, %r1 : f32
+    %a2 = scalar.addf %r2, %r3 : f32
+    %a3 = scalar.subf %r2, %r3 : f32
+    %b0 = scalar.addf %a0, %a2 : f32
+    %b1 = scalar.addf %a1, %a3 : f32
+    %b2 = scalar.subf %a0, %a2 : f32
+    %b3 = scalar.subf %a1, %a3 : f32
+    %y0 = scalar.mulf %b0, %scale : f32
+    %y1 = scalar.mulf %b1, %scale : f32
+    %y2 = scalar.mulf %b2, %scale : f32
+    %y3 = scalar.mulf %b3, %scale : f32
+    view.store %y0, %y[%row, %lane] : f32, view<[%rows]x128xf32>
+    view.store %y1, %y[%row, %i1] : f32, view<[%rows]x128xf32>
+    view.store %y2, %y[%row, %i2] : f32, view<[%rows]x128xf32>
+    view.store %y3, %y[%row, %i3] : f32, view<[%rows]x128xf32>
+  }
+  kernel.return
+}
