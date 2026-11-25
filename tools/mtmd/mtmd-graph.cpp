@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -583,6 +584,16 @@ ggml_tensor * mtmd_graph::build_attn(
 
     if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
         ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
+
+        // opt-in (MTMD_VISION_KV_CAST_EARLY): cast K/V before the permute
+        static const bool kv_cast_early = [] {
+            const char * env = std::getenv("MTMD_VISION_KV_CAST_EARLY");
+            return env != nullptr && strcmp(env, "0") != 0;
+        }();
+        if (kv_cast_early && k_cur->type == GGML_TYPE_F32 && v_cur->type == GGML_TYPE_F32) {
+            k = ggml_permute(ctx0, ggml_cast(ctx0, k_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+            v = ggml_permute(ctx0, ggml_cast(ctx0, v_cur, GGML_TYPE_F16), 0, 2, 1, 3);
+        }
 
         if (k->type != GGML_TYPE_F16) {
             k = ggml_cast(ctx0, k, GGML_TYPE_F16);
