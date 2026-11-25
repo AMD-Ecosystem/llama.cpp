@@ -10147,7 +10147,7 @@ struct ArchitectureRow64Case {
 
 static constexpr ArchitectureRow64Case kArchitectureRow64Cases[] = {
     { LLM_ARCH_QWEN35, true },
-    { LLM_ARCH_QWEN35MOE, false },
+    { LLM_ARCH_QWEN35MOE, true },
     { LLM_ARCH_QWEN3, true },
     { LLM_ARCH_LFM2, true },
     { LLM_ARCH_LFM2MOE, false },
