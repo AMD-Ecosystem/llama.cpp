@@ -98,6 +98,23 @@ template <> struct mmdq_raw<GGML_TYPE_Q4_0> {
     uint4 qs; // one block of 32 values per thread
 };
 
+template <> struct mmdq_raw<GGML_TYPE_F32> {
+    static constexpr int threads_per_row = 2;
+    uint4 w[8]; // 32 values per thread
+};
+
+template <> struct mmdq_raw<GGML_TYPE_IQ4_NL> {
+    static constexpr int threads_per_row = 2;
+    half  d;
+    uint4 qs; // one block of 32 values per thread
+};
+
+template <> struct mmdq_raw<GGML_TYPE_IQ4_XS> {
+    static constexpr int threads_per_row = 2;
+    uint2 hdr; // d, scales_h, scales_l[4]
+    uint4 qs;  // one sub-block of 32 values per thread
+};
+
 template <> struct mmdq_raw<GGML_TYPE_Q8_0> {
     static constexpr int threads_per_row = 2;
     int  qs[8]; // one block of 32 values per thread
@@ -156,6 +173,31 @@ static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_Q5_0> & raw,
     raw.d  = b->d;
     raw.qh = get_int_b2(b->qh, 0);
     raw.qs = make_uint4(get_int_b2(b->qs, 0), get_int_b2(b->qs, 1), get_int_b2(b->qs, 2), get_int_b2(b->qs, 3));
+}
+
+static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_F32> & raw, const char * row, const int ib, const int kq, const int h) {
+    const uint4 * w = (const uint4 *) (row + sizeof(float)*(ib*QK_K + kq + 32*h));
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        raw.w[i] = w[i];
+    }
+}
+
+// IQ4_NL blocks are 18 bytes, read with 2 byte loads
+static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_IQ4_NL> & raw, const char * row, const int ib, const int kq, const int h) {
+    const block_iq4_nl * b = (const block_iq4_nl *) row + ib*(QK_K/QK4_NL) + kq/QK4_NL + h;
+    raw.d  = b->d;
+    raw.qs = make_uint4(get_int_b2(b->qs, 0), get_int_b2(b->qs, 1), get_int_b2(b->qs, 2), get_int_b2(b->qs, 3));
+}
+
+// IQ4_XS blocks are 136 bytes, read with 8 byte loads
+static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_IQ4_XS> & raw, const char * row, const int ib, const int kq, const int h) {
+    const block_iq4_xs * b = (const block_iq4_xs *) row + ib;
+    raw.hdr = *(const uint2 *) b;
+    const uint2 * qs = (const uint2 *) (b->qs + 16*(kq/32 + h));
+    const uint2 q0 = qs[0];
+    const uint2 q1 = qs[1];
+    raw.qs = make_uint4(q0.x, q0.y, q1.x, q1.y);
 }
 
 static __device__ __forceinline__ void mmdq_load(mmdq_raw<GGML_TYPE_Q8_0> & raw, const char * row, const int ib, const int kq, const int h) {
@@ -297,6 +339,66 @@ static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_Q5_
     }
 }
 
+// F32: v[0..15] are the values 32h..32h+31 of the 64-step, rounded to fp16
+static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_F32> & raw, const int kq, const int h, uint32_t * v) {
+    GGML_UNUSED_VARS(kq, h);
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        const float4 w = *(const float4 *) &raw.w[i];
+        v[2*i + 0] = mmdq_h2_as_u32(__floats2half2_rn(w.x, w.y));
+        v[2*i + 1] = mmdq_h2_as_u32(__floats2half2_rn(w.z, w.w));
+    }
+}
+
+// kvalues_iq4nl + 128 of the 4 nibbles held in the bytes of q
+static __device__ __forceinline__ uint32_t mmdq_iq4_lookup(const uint32_t q) {
+#if (defined(GGML_USE_HIP) && defined(RDNA3)) && GGML_CUDA_MMDQ_PERM_UNPACK
+    // v_perm_b32 is an 8 entry byte table: selector 0-3 takes a byte of the last operand, 4-7 of the first
+    const uint32_t s = q & 0x07070707u;
+    uint32_t r0, r1;
+    __asm__("v_perm_b32 %0, %1, %2, %3" : "=v"(r0) : "v"(0x766A5D4Fu), "v"(0x3F2D1801u), "v"(s));
+    __asm__("v_perm_b32 %0, %1, %2, %3" : "=v"(r1) : "v"(0xF1D9C5B5u), "v"(0xA6998D81u), "v"(s));
+    const uint32_t m = ((q >> 3) & 0x01010101u)*0xFFu;
+    return (r1 & m) | (r0 & ~m);
+#else
+    const uint64_t t[2] = {0x766A5D4F3F2D1801ull, 0xF1D9C5B5A6998D81ull};
+    uint32_t r = 0;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t n = (q >> (8*i)) & 0xFu;
+        r |= (uint32_t) ((t[n >> 3] >> (8*(n & 7))) & 0xFFu) << (8*i);
+    }
+    return r;
+#endif
+}
+
+// IQ4_NL/IQ4_XS: value = kvalues_iq4nl[q]*d, byte j holds value j (low nibble) and value j + 16 (high nibble)
+static __device__ __forceinline__ void mmdq_dequant_iq4(const uint4 & qs, const half2 d, uint32_t * v) {
+    const half2 off = __float2half2_rn(1152.0f); // 1024 + 128
+    const uint32_t q[4] = {qs.x, qs.y, qs.z, qs.w};
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t ql = mmdq_iq4_lookup(q[i] & 0x0F0F0F0Fu);
+        const uint32_t qu = mmdq_iq4_lookup((q[i] >> 4) & 0x0F0F0F0Fu);
+        v[2*i + 0] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_lo(ql), off), d));
+        v[2*i + 1] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_hi(ql), off), d));
+        v[2*i + 8] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_lo(qu), off), d));
+        v[2*i + 9] = mmdq_h2_as_u32(__hmul2(__hsub2(mmdq_bytes_hi(qu), off), d));
+    }
+}
+
+static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_IQ4_NL> & raw, const int kq, const int h, uint32_t * v) {
+    GGML_UNUSED_VARS(kq, h);
+    mmdq_dequant_iq4(raw.qs, __half2half2(raw.d), v);
+}
+
+static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_IQ4_XS> & raw, const int kq, const int h, uint32_t * v) {
+    const int ib32 = kq/32 + h;
+    const int ls   = ((raw.hdr.y >> (4*ib32)) & 0xF) | (((raw.hdr.x >> (16 + 2*ib32)) & 3) << 4);
+    const float d  = __half2float(*(const half *) &raw.hdr.x);
+    mmdq_dequant_iq4(raw.qs, __float2half2_rn(d*(ls - 32)), v);
+}
+
 // Q8_0: v[0..15] are the values 32h..32h+31 of the 64-step; the int8 values are biased by 128 to use the 0x6400 trick
 static __device__ __forceinline__ void mmdq_dequant(const mmdq_raw<GGML_TYPE_Q8_0> & raw, const int kq, const int h, uint32_t * v) {
     GGML_UNUSED_VARS(kq, h);
@@ -345,6 +447,24 @@ static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_Q4_0>
 }
 
 static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_Q5_0> & raw, half * srow, const int kq, const int h) {
+    uint32_t v[16];
+    mmdq_dequant(raw, kq, h, v);
+    mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
+}
+
+static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_F32> & raw, half * srow, const int kq, const int h) {
+    uint32_t v[16];
+    mmdq_dequant(raw, kq, h, v);
+    mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
+}
+
+static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_IQ4_NL> & raw, half * srow, const int kq, const int h) {
+    uint32_t v[16];
+    mmdq_dequant(raw, kq, h, v);
+    mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
+}
+
+static __device__ __forceinline__ void mmdq_store(const mmdq_raw<GGML_TYPE_IQ4_XS> & raw, half * srow, const int kq, const int h) {
     uint32_t v[16];
     mmdq_dequant(raw, kq, h, v);
     mmdq_store_v16(v, srow + 32*h, srow + 32*h + 16);
@@ -915,13 +1035,13 @@ static void mul_mat_dq_launch(
         constexpr int rows_per_block = glu ? BO/2 : BO;
         const dim3 block(32*NWT*NWO, 1, 1);
         if constexpr (!has_ids && !glu) {
-            // GGML_CUDA_MMDQ_KSPLIT: one token tile with few row tiles does not fill the GPU, split K over 2-3 groups of blocks (as GlobalSplitU in hipBLASLt)
-            // measured on gfx1151 with 128 tokens: 3 segments up to 64 waves, 2 up to 160 waves, slower above
+            // GGML_CUDA_MMDQ_KSPLIT: one token tile or one row tile with few blocks does not fill the GPU, split K over 2-5 groups of blocks (as GlobalSplitU in hipBLASLt)
+            // measured on gfx1151: 5 segments up to 32 waves, 3 up to 64 waves, 2 up to 160 waves, slower above
             static const bool ksplit_on = mmdq_env_flag("GGML_CUDA_MMDQ_KSPLIT");
             const int nwaves = nblocks_t*((nrows_x + rows_per_block - 1)/rows_per_block)*NWT*NWO;
             const int nsteps = ncols_x/MMDQ_BK;
-            int ksplit = ksplit_on && nblocks_t == 1 && mmdq_pool != nullptr && epi.stride_col_res == (epi.res ? stride_col_dst : 0) && stride_col_dst == nrows_x ?
-                min(nsteps/8, nwaves <= 64 ? 3 : nwaves <= 160 ? 2 : 1) : 1;
+            int ksplit = ksplit_on && (nblocks_t == 1 || nrows_x <= rows_per_block) && mmdq_pool != nullptr && epi.stride_col_res == (epi.res ? stride_col_dst : 0) && stride_col_dst == nrows_x ?
+                min(nsteps/8, nwaves <= 32 ? 5 : nwaves <= 64 ? 3 : nwaves <= 160 ? 2 : 1) : 1;
             // every segment has at least one step
             while (ksplit > 1 && (ksplit - 1)*((nsteps + ksplit - 1)/ksplit) >= nsteps) {
                 ksplit--;
@@ -1025,6 +1145,24 @@ static void mul_mat_dq_switch_type(
                 break;
             }
             GGML_ABORT("unsupported type for mmdq: %s", ggml_type_name(type));
+        case GGML_TYPE_F32:
+            if constexpr (!has_ids && !glu) {
+                mul_mat_dq_switch<GGML_TYPE_F32, false, false>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
+                break;
+            }
+            GGML_ABORT("unsupported type for mmdq: %s", ggml_type_name(type));
+        case GGML_TYPE_IQ4_NL:
+            if constexpr (!has_ids) {
+                mul_mat_dq_switch<GGML_TYPE_IQ4_NL, false, glu>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
+                break;
+            }
+            GGML_ABORT("unsupported type for mmdq: %s", ggml_type_name(type));
+        case GGML_TYPE_IQ4_XS:
+            if constexpr (!has_ids) {
+                mul_mat_dq_switch<GGML_TYPE_IQ4_XS, false, glu>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
+                break;
+            }
+            GGML_ABORT("unsupported type for mmdq: %s", ggml_type_name(type));
         case GGML_TYPE_Q5_K:
             if constexpr (!glu) {
                 mul_mat_dq_switch<GGML_TYPE_Q5_K, has_ids, false>(x, y, dst, ncols_x, nrows_x, ncols_y, ncols_y_cfg, stride_row_x, stride_col_dst, ids, epi, stream);
@@ -1050,11 +1188,17 @@ static bool mmdq_supported_shape(const ggml_tensor * src0, const ggml_tensor * s
     if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
+    // the activations are converted to fp16
+    const ggml_prec prec_src1 = ggml_prec_get_src(dst, 1);
+    if (ggml_prec_get_acc(dst) == GGML_PREC_F32 || prec_src1 == GGML_PREC_F32 || prec_src1 == GGML_PREC_BF16) {
+        return false;
+    }
     if (src0->nb[0] != ggml_type_size(src0->type) || !ggml_is_contiguous(src1) || dst->nb[0] != sizeof(float)) {
         return false;
     }
-    // Q4_K/Q5_K rows are read with 16 byte loads, Q6_K/Q8_0 rows with 2 byte loads (Q5_1 is checked by the caller)
-    if (src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q5_1 && src0->type != GGML_TYPE_Q5_0 && src0->type != GGML_TYPE_Q4_0 && ((uintptr_t) src0->data % 16 != 0 || src0->nb[1] % 16 != 0 || src0->nb[2] % 16 != 0)) {
+    // Q4_K/Q5_K/F32 rows are read with 16 byte loads, IQ4_XS rows with 8 byte loads, the other types with 2 byte loads (Q5_1 is checked by the caller)
+    const size_t align = src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_F32 ? 16 : src0->type == GGML_TYPE_IQ4_XS ? 8 : 1;
+    if ((uintptr_t) src0->data % align != 0 || src0->nb[1] % align != 0 || src0->nb[2] % align != 0) {
         return false;
     }
     return src0->ne[1] <= INT_MAX && src1->ne[1]*src1->ne[2] <= INT_MAX;
@@ -1079,15 +1223,23 @@ bool ggml_cuda_should_use_mmdq(const ggml_tensor * src0, const ggml_tensor * src
     static const bool q5_K           = mmdq_env_flag("GGML_CUDA_MMDQ_Q5_K");
     static const bool q5_0           = mmdq_env_flag("GGML_CUDA_MMDQ_Q5_0");
     static const bool q4_0           = mmdq_env_flag("GGML_CUDA_MMDQ_Q4_0");
+    static const bool iq4            = mmdq_env_flag("GGML_CUDA_MMDQ_IQ4");
     const bool is_q8_0 = src0->type == GGML_TYPE_Q8_0;
-    const bool is_q5_0 = src0->type == GGML_TYPE_Q5_0 || (q4_0 && src0->type == GGML_TYPE_Q4_0);
+    static const bool f32            = mmdq_env_flag("GGML_CUDA_MMDQ_F32");
+    const bool is_q5_0 = src0->type == GGML_TYPE_Q5_0 || (q4_0 && src0->type == GGML_TYPE_Q4_0) || (iq4 && (src0->type == GGML_TYPE_IQ4_XS || src0->type == GGML_TYPE_IQ4_NL)) ||
+        (f32 && src0->type == GGML_TYPE_F32);
     if (src0->type != GGML_TYPE_Q4_K && (src0->type != GGML_TYPE_Q6_K || no_q6k) && (!is_q8_0 || !q8_0) && (src0->type != GGML_TYPE_Q5_K || !q5_K) &&
             (!is_q5_0 || (src0->type == GGML_TYPE_Q5_0 && !q5_0))) {
         return false;
     }
-    // Q8_0/Q5_0/Q4_0 are read in steps of 64 values
+    // these types are read in steps of 64 values
     if ((is_q8_0 || is_q5_0) && src0->ne[0] % 64 != 0) {
         return false;
+    }
+    // opt-in: matmuls with up to GGML_CUDA_MMDQ_FEW_ROWS output rows (one row tile), faster than mmq with the K split
+    static const int few_rows = mmdq_env_int("GGML_CUDA_MMDQ_FEW_ROWS", 0);
+    if (few_rows > 0 && src0->ne[1] <= few_rows && src1->ne[1] >= 64) {
+        return src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1;
     }
     const int min_batch = is_q8_0 ? min_batch_q8_0 : src0->type == GGML_TYPE_Q4_K ? min_batch_q4_K : min_batch_q6_K;
     if (src1->ne[1] < min_batch) {
@@ -1262,7 +1414,8 @@ bool ggml_cuda_should_use_mmdq_glu(const ggml_tensor * glu, const ggml_tensor * 
         return false;
     }
     if (gate->op == GGML_OP_MUL_MAT) {
-        return (w_gate->type == GGML_TYPE_Q4_K || w_gate->type == GGML_TYPE_Q6_K || w_gate->type == GGML_TYPE_Q5_0 || w_gate->type == GGML_TYPE_Q4_0) &&
+        return (w_gate->type == GGML_TYPE_Q4_K || w_gate->type == GGML_TYPE_Q6_K || w_gate->type == GGML_TYPE_Q5_0 || w_gate->type == GGML_TYPE_Q4_0 ||
+                w_gate->type == GGML_TYPE_IQ4_XS || w_gate->type == GGML_TYPE_IQ4_NL) &&
             ggml_cuda_should_use_mmdq(w_gate, gate->src[1], gate, cc) && ggml_cuda_should_use_mmdq(w_up, up->src[1], up, cc) &&
             ggml_cuda_should_use_mmdq(down->src[0], glu, down, cc);
     }

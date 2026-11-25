@@ -264,13 +264,16 @@ static __global__ void __launch_bounds__(FV_NW*32, 1) flash_attn_ext_vision(
         m_new = fmaxf(m_new, __shfl_xor(m_new, 16, 32));
         // a query column with only -inf so far keeps o = l = 0
         const float m_exp = MASK && m_new == -INFINITY ? 0.0f : m_new;
-        const float alpha = __builtin_amdgcn_exp2f(m - m_exp);
-        m = m_new;
-        l *= alpha;
+        // skipped by the whole wave once the running maxima have settled
+        if (m_new > m) {
+            const float alpha = __builtin_amdgcn_exp2f(m - m_exp);
+            l *= alpha;
 #pragma unroll
-        for (int dt = 0; dt < NKD; ++dt) {
-            o[dt] *= alpha;
+            for (int dt = 0; dt < NKD; ++dt) {
+                o[dt] *= alpha;
+            }
         }
+        m = m_new;
 
         // P^T as WMMA B operand: both half-waves need all 16 keys of the query column, keys 2*v + hl come from this lane
 #pragma unroll
@@ -324,14 +327,14 @@ static __global__ void __launch_bounds__(FV_NW*32, 1) flash_attn_ext_vision(
 #endif // FATTN_VISION_DEVICE
 }
 
-// D=256 prefill: the 16 queries of a group are handled by two waves, each owns half of the head dim of Q and O.
-// The partial S of the two waves are summed through LDS, so both compute the same softmax.
-static constexpr int FS_BK = 32;       // keys per K/V tile
+// D=256/512 prefill: the 16 queries of a group are handled by D/128 waves, each owns 128 of the head dim of Q and O.
+// The partial S of the waves are summed through LDS in a fixed order, so all compute the same softmax.
+static constexpr int FS_BK = 32;       // keys per K/V tile for D=256, D=512 uses half of that to fit in LDS
 
 // NG query groups of 16 per block; NG = 8 puts the S exchange buffer over the K tile to fit in LDS
 // SXH: exchange the partial S in f16 (both waves round both halves the same way), so the buffer fits next to the K tile and one barrier per tile is saved
 template <int D, int NG, bool SXH>
-static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_split(
+static __global__ void __launch_bounds__(NG*(D/128)*32, 1) flash_attn_ext_prefill_split(
         const char * __restrict__ Q, const char * __restrict__ K, const char * __restrict__ V, float * __restrict__ dst,
         const int nq, const int nkv, const int nh, const float qscale,
         const int64_t nbq1, const int64_t nbq2, const int64_t nbq3,
@@ -340,21 +343,24 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
         const char * __restrict__ mask, const uint8_t * __restrict__ cls, const int gqa,
         const int64_t nbm1, const int64_t nbm3, const int nbm) {
 #ifdef FATTN_VISION_DEVICE
-    constexpr int DH  = D/2;
+    constexpr int NS  = D/128;                  // waves per query group
+    constexpr int BK  = D == 256 ? FS_BK : FS_BK/2;
+    constexpr int NST = BK/16;                  // 16 key subtiles per K/V tile
+    constexpr int DH  = D/NS;
     constexpr int NCH = D/8;
     constexpr int NKD = DH/16;
-    constexpr int NT  = NG*2*32;
-    constexpr bool SX_OVER_K = NG > 4 && !SXH;
-    constexpr int NLD = (FS_BK/2*NCH + NT - 1)/NT;
+    constexpr int NT  = NG*NS*32;
+    constexpr bool SX_OVER_K = D == 256 && NG > 4 && !SXH;
+    constexpr int NLD = (BK/2*NCH + NT - 1)/NT;
     constexpr int SK  = D + 8;
-    constexpr int SV  = FS_BK + 8;
+    constexpr int SV  = BK + 8;
 
-    constexpr int KS_BYTES = FS_BK*SK*sizeof(_Float16);
-    constexpr int SX_BYTES = 2*NG*32*16*(SXH ? sizeof(_Float16) : sizeof(float));
+    constexpr int KS_BYTES = BK*SK*sizeof(_Float16);
+    constexpr int SX_BYTES = NS*NG*32*NST*8*(SXH ? sizeof(_Float16) : sizeof(float));
     __shared__ __align__(16) char smem[(SX_OVER_K ? (KS_BYTES > SX_BYTES ? KS_BYTES : SX_BYTES) : KS_BYTES + SX_BYTES) + D*SV*sizeof(_Float16)];
     _Float16 * Ks = (_Float16 *) smem;
-    float (*Sx)[32][16] = (float (*)[32][16]) (smem + (SX_OVER_K ? 0 : KS_BYTES));
-    _Float16 (*Sxh)[32][16] = (_Float16 (*)[32][16]) (smem + KS_BYTES);
+    float (*Sx)[32][NST*8] = (float (*)[32][NST*8]) (smem + (SX_OVER_K ? 0 : KS_BYTES));
+    _Float16 (*Sxh)[32][NST*8] = (_Float16 (*)[32][NST*8]) (smem + KS_BYTES);
     _Float16 * Vt = (_Float16 *) (smem + (SX_OVER_K ? (KS_BYTES > SX_BYTES ? KS_BYTES : SX_BYTES) : KS_BYTES + SX_BYTES));
 
     const int tid  = threadIdx.x;
@@ -362,7 +368,8 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
     const int wave = tid / 32;
     const int lr   = lane % 16;
     const int hl   = lane / 16;
-    const int hd   = wave % 2;
+    const int hd   = wave % NS;
+    const int wg   = wave - hd; // first wave of the query group
 
     const int h    = blockIdx.x;
     const int qblk = gridDim.y - 1 - blockIdx.y;
@@ -373,7 +380,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
     K += hk*nbk2 + b*nbk3;
     V += hk*nbv2 + b*nbv3;
 
-    const int q = qblk*16*NG + (wave/2)*16 + lr;
+    const int q = qblk*16*NG + (wave/NS)*16 + lr;
     fv_h16 qb[NKD];
 #pragma unroll
     for (int c = 0; c < NKD; ++c) {
@@ -396,7 +403,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
             for (int r = 0; r < 2; ++r) {
                 kr[i][r] = make_uint4(0, 0, 0, 0);
                 vr[i][r] = make_uint4(0, 0, 0, 0);
-                if (c < FS_BK/2*NCH && k0 + row + r < nkv) {
+                if (c < BK/2*NCH && k0 + row + r < nkv) {
                     kr[i][r] = *(const uint4 *) (K + (k0 + row + r)*nbk1 + ch*16);
                     vr[i][r] = *(const uint4 *) (V + (k0 + row + r)*nbv1 + ch*16);
                 }
@@ -409,7 +416,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
             const int c   = tid + i*NT;
             const int row = 2*(c / NCH);
             const int ch  = c % NCH;
-            if (c < FS_BK/2*NCH) {
+            if (c < BK/2*NCH) {
                 *(uint4 *) (Ks + (row + 0)*SK + ch*8) = kr[i][0];
                 *(uint4 *) (Ks + (row + 1)*SK + ch*8) = kr[i][1];
                 const uint32_t * v0 = (const uint32_t *) &vr[i][0];
@@ -431,7 +438,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
         o[dt] = fv_f8{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
-    const int ntiles = (nkv + FS_BK - 1)/FS_BK;
+    const int ntiles = (nkv + BK - 1)/BK;
     const uint8_t * cl = cls + (int64_t(nbm == 1 ? 0 : b)*gridDim.y + qblk)*ntiles;
     const half * mrow = (const half *) (mask + (nbm == 1 ? 0 : b)*nbm3 + int64_t(q < nq ? q : 0)*nbm1);
     auto next_tile = [&](int t) {
@@ -443,7 +450,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
 
     int t = next_tile(0);
     if (t < ntiles) {
-        load_regs(t*FS_BK);
+        load_regs(t*BK);
     }
     while (t < ntiles) {
         __syncthreads();
@@ -451,12 +458,12 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
         __syncthreads();
         const int t_next = next_tile(t + 1);
         if (t_next < ntiles) {
-            load_regs(t_next*FS_BK);
+            load_regs(t_next*BK);
         }
 
-        fv_f8 s[2];
+        fv_f8 s[NST];
 #pragma unroll
-        for (int st = 0; st < 2; ++st) {
+        for (int st = 0; st < NST; ++st) {
             s[st] = fv_f8{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 #pragma unroll
             for (int c = 0; c < NKD; ++c) {
@@ -470,32 +477,37 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
         if constexpr (SXH) {
             typedef _Float16 fv_h8 __attribute__((ext_vector_type(8)));
 #pragma unroll
-            for (int st = 0; st < 2; ++st) {
-                const fv_h8 own = __builtin_convertvector(s[st], fv_h8);
-                *(fv_h8 *) &Sxh[wave][lane][st*8] = own;
-                s[st] = __builtin_convertvector(own, fv_f8);
+            for (int st = 0; st < NST; ++st) {
+                *(fv_h8 *) &Sxh[wave][lane][st*8] = __builtin_convertvector(s[st], fv_h8);
             }
             __syncthreads();
 #pragma unroll
-            for (int st = 0; st < 2; ++st) {
-                typedef _Float16 fv_h8b __attribute__((ext_vector_type(8)));
-                s[st] += __builtin_convertvector(*(const fv_h8b *) &Sxh[wave ^ 1][lane][st*8], fv_f8);
+            for (int st = 0; st < NST; ++st) {
+                s[st] = __builtin_convertvector(*(const fv_h8 *) &Sxh[wg][lane][st*8], fv_f8);
+#pragma unroll
+                for (int o = 1; o < NS; ++o) {
+                    s[st] += __builtin_convertvector(*(const fv_h8 *) &Sxh[wg + o][lane][st*8], fv_f8);
+                }
             }
         } else {
 #pragma unroll
-            for (int st = 0; st < 2; ++st) {
+            for (int st = 0; st < NST; ++st) {
                 *(fv_f8 *) &Sx[wave][lane][st*8] = s[st];
             }
             __syncthreads();
 #pragma unroll
-            for (int st = 0; st < 2; ++st) {
-                s[st] += *(const fv_f8 *) &Sx[wave ^ 1][lane][st*8];
+            for (int st = 0; st < NST; ++st) {
+                s[st] = *(const fv_f8 *) &Sx[wg][lane][st*8];
+#pragma unroll
+                for (int o = 1; o < NS; ++o) {
+                    s[st] += *(const fv_f8 *) &Sx[wg + o][lane][st*8];
+                }
             }
         }
 
-        const int kb = t*FS_BK;
+        const int kb = t*BK;
 #pragma unroll
-        for (int st = 0; st < 2; ++st) {
+        for (int st = 0; st < NST; ++st) {
             const int k0 = kb + st*16; // nkv % 16 == 0
             if (k0 >= nkv) {
                 s[st] = fv_f8{-INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY, -INFINITY};
@@ -513,7 +525,7 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
 
         float m_new = m;
 #pragma unroll
-        for (int st = 0; st < 2; ++st) {
+        for (int st = 0; st < NST; ++st) {
 #pragma unroll
             for (int v = 0; v < 8; ++v) {
                 m_new = fmaxf(m_new, s[st][v]);
@@ -521,16 +533,19 @@ static __global__ void __launch_bounds__(NG*2*32, 1) flash_attn_ext_prefill_spli
         }
         m_new = fmaxf(m_new, __shfl_xor(m_new, 16, 32));
         const float m_exp = m_new == -INFINITY ? 0.0f : m_new;
-        const float alpha = __builtin_amdgcn_exp2f(m - m_exp);
-        m = m_new;
-        l *= alpha;
+        // skipped by the whole wave once the running maxima have settled
+        if (m_new > m) {
+            const float alpha = __builtin_amdgcn_exp2f(m - m_exp);
+            l *= alpha;
 #pragma unroll
-        for (int dt = 0; dt < NKD; ++dt) {
-            o[dt] *= alpha;
+            for (int dt = 0; dt < NKD; ++dt) {
+                o[dt] *= alpha;
+            }
         }
+        m = m_new;
 
 #pragma unroll
-        for (int st = 0; st < 2; ++st) {
+        for (int st = 0; st < NST; ++st) {
             union {
                 fv_h16   h;
                 uint32_t u[8];
@@ -627,7 +642,9 @@ bool ggml_cuda_flash_attn_ext_prefill_supported(int cc, const ggml_tensor * dst)
             (uintptr_t) mask->data % 16 != 0 || mask->nb[1] % 16 != 0 || (mask->ne[3] > 1 && mask->nb[3] % 16 != 0)) {
         return false;
     }
-    return (D == 64 || D == 128 || D == 256) && Q->ne[2] % K->ne[2] == 0 && fattn_vision_common_supported(cc, dst);
+    // opt-in (GGML_CUDA_FATTN_PREFILL_D512): D=512 with four waves per query group
+    static const bool d512 = getenv("GGML_CUDA_FATTN_PREFILL_D512") && atoi(getenv("GGML_CUDA_FATTN_PREFILL_D512")) != 0;
+    return (D == 64 || D == 128 || D == 256 || (D == 512 && d512)) && Q->ne[2] % K->ne[2] == 0 && fattn_vision_common_supported(cc, dst);
 }
 
 static int64_t mask_nb1_key(const ggml_tensor * mask) {
@@ -652,11 +669,12 @@ static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * d
     const int nq  = Q->ne[1];
     const int nkv = K->ne[1];
     const int nh  = Q->ne[2];
-    const bool split = mask && Q->ne[0] == 256;
+    const bool d512  = mask && Q->ne[0] == 512;
+    const bool split = mask && (Q->ne[0] == 256 || d512);
     // 8 query groups (128 queries) per block was faster than 4 on Gemma-2B, Qwen3.6-27B shapes, about even on Gemma-3-12B (gfx1151)
     static const int split_ng = getenv("GGML_CUDA_FATTN_PREFILL_D256_NG") && atoi(getenv("GGML_CUDA_FATTN_PREFILL_D256_NG")) == 4 ? 4 : 8;
-    const int bq  = split ? 16*split_ng : FV_BQ;
-    const int bk  = split ? FS_BK : FV_BK;
+    const int bq  = d512 ? 64 : split ? 16*split_ng : FV_BQ;
+    const int bk  = d512 ? FS_BK/2 : split ? FS_BK : FV_BK;
     const int nqb = (nq + bq - 1)/bq;
     const int ntk = (nkv + bk - 1)/bk;
     const int nbm = mask ? mask->ne[3] : 0;
@@ -682,7 +700,10 @@ static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * d
         } else {
             cls = cls_local.alloc(size_t(nbm)*nqb*ntk);
         }
-        if (split && split_ng == 8) {
+        if (d512) {
+            flash_attn_ext_prefill_classify<64, FS_BK/2><<<dim3(ntk, nqb, nbm), block, 0, stream>>>(
+                (const char *) mask->data, cls, nq, nkv, mask->nb[1], mask->nb[3]);
+        } else if (split && split_ng == 8) {
             flash_attn_ext_prefill_classify<128, FS_BK><<<dim3(ntk, nqb, nbm), block, 0, stream>>>(
                 (const char *) mask->data, cls, nq, nkv, mask->nb[1], mask->nb[3]);
         } else if (split) {
@@ -697,21 +718,27 @@ static void fattn_vision_launch(ggml_backend_cuda_context & ctx, ggml_tensor * d
     const dim3 grid = mask ? dim3(nh, nqb, Q->ne[3]) : dim3(nqb, nh, Q->ne[3]);
 
     if (split) {
-#define FS_LAUNCH(NG_, SXH_) \
-        flash_attn_ext_prefill_split<256, NG_, SXH_><<<grid, dim3(NG_*2*32, 1, 1), 0, stream>>>( \
+#define FS_LAUNCH(D_, NG_, SXH_) \
+        flash_attn_ext_prefill_split<D_, NG_, SXH_><<<grid, dim3(NG_*(D_/128)*32, 1, 1), 0, stream>>>( \
             (const char *) Q->data, (const char *) K->data, (const char *) V->data, (float *) dst->data, \
             nq, nkv, nh, qscale, Q->nb[1], Q->nb[2], Q->nb[3], K->nb[1], K->nb[2], K->nb[3], V->nb[1], V->nb[2], V->nb[3], \
             (const char *) mask->data, cls, nh / K->ne[2], mask->nb[1], mask->nb[3], nbm)
         // opt-in (GGML_CUDA_FATTN_PREFILL_D256_SXH): f16 exchange of the partial scores, one barrier less per tile
         static const bool sxh = getenv("GGML_CUDA_FATTN_PREFILL_D256_SXH") && atoi(getenv("GGML_CUDA_FATTN_PREFILL_D256_SXH")) != 0;
-        if (split_ng == 8) {
+        if (d512) {
             if (sxh) {
-                FS_LAUNCH(8, true);
+                FS_LAUNCH(512, 4, true);
             } else {
-                FS_LAUNCH(8, false);
+                FS_LAUNCH(512, 4, false);
+            }
+        } else if (split_ng == 8) {
+            if (sxh) {
+                FS_LAUNCH(256, 8, true);
+            } else {
+                FS_LAUNCH(256, 8, false);
             }
         } else {
-            FS_LAUNCH(4, false);
+            FS_LAUNCH(256, 4, false);
         }
 #undef FS_LAUNCH
         CUDA_CHECK(cudaGetLastError());

@@ -420,6 +420,282 @@ gdn_chunked_f32_cu(GDN_CHUNKED_PARAMS) {
     gdn_chunked_body(GDN_CHUNKED_ARGS);
 }
 
+// WMMA variant (opt-in, GGML_CUDA_GDN_WMMA): the same chunked recurrence with every product as fp16
+// WMMA with fp32 accumulation. The operands (K, Q, Tinv, qk, Y, v_new and the state) are rounded to
+// fp16, the state itself and all sums stay fp32. One block of 8 waves per (head, sequence); wave w
+// owns the 16 state columns [16w, 16w + 16) in registers, as 8 accumulator tiles.
+static constexpr int GDN_W_THREADS = 256;
+
+#if defined(GGML_USE_HIP) && defined(RDNA3_5)
+typedef _Float16 gdn_half16_t __attribute__((ext_vector_type(16)));
+typedef float    gdn_float8_t __attribute__((ext_vector_type(8)));
+
+static constexpr int   GDN_W_KP      = GDN_HEAD_DIM + 8; // row pitch in halfs, rows stay 16 byte aligned
+static constexpr int   GDN_W_CP      = GDN_CHUNK + 8;
+static constexpr float GDN_W_SSCALE  = 256.0f;           // the state is held scaled, its entries are small
+
+// lane m: elements [k0, k0 + 16) of row row0 + m % 16
+static __device__ __forceinline__ gdn_half16_t gdn_w_load(const half * base, const int pitch, const int row0, const int k0, const int lane) {
+    const uint4 * src = (const uint4 *) (base + (row0 + lane % 16)*pitch + k0);
+    const uint4 tmp[2] = {src[0], src[1]};
+    gdn_half16_t r;
+    memcpy(&r, tmp, sizeof(r));
+    return r;
+}
+
+// accumulator tile (element l of a lane: row 2*l + lane/16, column lane % 16) as the second WMMA
+// operand (lane n: rows 0..15 of column n)
+static __device__ __forceinline__ gdn_half16_t gdn_w_operand(const gdn_float8_t x, const int lane) {
+    const bool lo = lane < 16;
+    gdn_half16_t r;
+#pragma unroll
+    for (int l = 0; l < 8; l++) {
+        const float own = x[l];
+        const float oth = __shfl_xor_sync(0xffffffff, own, 16, WARP_SIZE);
+        r[2*l + 0] = (_Float16) (lo ? own : oth);
+        r[2*l + 1] = (_Float16) (lo ? oth : own);
+    }
+    return r;
+}
+
+static __device__ __forceinline__ gdn_float8_t gdn_w_mma(const gdn_half16_t a, const gdn_half16_t b, const gdn_float8_t c) {
+    return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a, b, c);
+}
+#endif // defined(GGML_USE_HIP) && defined(RDNA3_5)
+
+__global__ void __launch_bounds__(GDN_W_THREADS)
+gdn_chunked_wmma(GDN_CHUNKED_PARAMS) {
+#if defined(GGML_USE_HIP) && defined(RDNA3_5)
+    constexpr int CHUNK    = GDN_CHUNK;
+    constexpr int HEAD_DIM = GDN_HEAD_DIM;
+    constexpr int KP       = GDN_W_KP;
+    constexpr int CP       = GDN_W_CP;
+
+    const int head     = blockIdx.x;
+    const int sequence = blockIdx.y;
+    const int tid      = threadIdx.x;
+    const int lane     = tid % 32;
+    const int wave     = tid / 32;
+    const int ln       = lane % 16;
+    const int hf       = lane / 16;
+    const int col      = wave*16 + ln;
+
+    const uint32_t head_qk = fastmodulo(head, neqk1_magic);
+    const uint32_t seq_qk  = fastdiv(sequence, rq3_magic);
+
+    __shared__ half  s_k    [CHUNK*KP];
+    __shared__ half  s_q    [CHUNK*KP];
+    __shared__ half  s_kt   [HEAD_DIM*CP];              // K^T * exp(g_last - g_cs[t]) * SSCALE
+    __shared__ half  s_tinv [CHUNK*CP];                 // Tinv - I
+    __shared__ half  s_qk   [CHUNK*CP];
+    __shared__ float s_a    [CHUNK][GDN_CHUNK_PITCH];
+    __shared__ float s_g_cs [CHUNK];
+    __shared__ float s_beta [CHUNK];
+    __shared__ float s_beta_decay[CHUNK];               // beta[r] * exp(g_cs[r]) / SSCALE
+    __shared__ float s_decay     [CHUNK];               // exp(g_cs[i]) / SSCALE
+    __shared__ float s_decay_end [CHUNK];               // exp(g_last - g_cs[t]) * SSCALE
+
+    // S[ab][l]: state row ab*16 + 2*l + hf, column col
+    gdn_float8_t S[HEAD_DIM/16];
+    const int64_t state_off = ((int64_t) sequence * n_heads + head) * HEAD_DIM * HEAD_DIM + (int64_t) col * HEAD_DIM;
+#pragma unroll
+    for (int ab = 0; ab < HEAD_DIM/16; ab++) {
+#pragma unroll
+        for (int l = 0; l < 8; l++) {
+            S[ab][l] = state_in[state_off + ab*16 + 2*l + hf] * GDN_W_SSCALE;
+        }
+    }
+
+    const gdn_float8_t zero = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    const int64_t n_chunks = (n_tokens + CHUNK - 1) / CHUNK;
+
+    for (int64_t chunk = 0; chunk < n_chunks; chunk++) {
+        // opaque, so that the per-lane addresses of this chunk are not kept as induction variables
+        int tok0_lane = (int) (chunk * CHUNK);
+        asm volatile("" : "+v"(tok0_lane));
+        const int64_t tok0    = tok0_lane;
+        const int     n_valid = (int) (n_tokens - chunk * CHUNK < CHUNK ? n_tokens - chunk * CHUNK : CHUNK);
+
+        __syncthreads();
+
+        if (wave == 0) {
+            const int64_t gb_off = sequence * sb3 + (tok0 + lane) * sb2 + head * sb1;
+            const float   b      = lane < n_valid ? beta[gb_off] : 0.0f;
+            float         g_cs   = lane < n_valid ? g[gb_off] * GDN_LOG2E : 0.0f;
+#pragma unroll
+            for (int off = 1; off < CHUNK; off <<= 1) {
+                const float prev = __shfl_up_sync(0xffffffff, g_cs, off, WARP_SIZE);
+                if (lane >= off) {
+                    g_cs += prev;
+                }
+            }
+            const float g_last = __shfl_sync(0xffffffff, g_cs, CHUNK - 1, WARP_SIZE);
+
+            s_g_cs      [lane] = g_cs;
+            s_beta      [lane] = b;
+            s_beta_decay[lane] = b * gdn_exp2(g_cs) * (1.0f / GDN_W_SSCALE);
+            s_decay     [lane] = gdn_exp2(g_cs) * (1.0f / GDN_W_SSCALE);
+            s_decay_end [lane] = gdn_exp2(g_last - g_cs) * GDN_W_SSCALE;
+        }
+        __syncthreads();
+
+        // K and Q rows and the decayed K^T as fp16
+#pragma unroll
+        for (int i = 0; i < CHUNK * HEAD_DIM / 4 / GDN_W_THREADS; i++) {
+            const int  idx   = tid + i * GDN_W_THREADS;
+            const int  t     = idx / (HEAD_DIM / 4);
+            const int  s     = (idx - t * (HEAD_DIM / 4)) * 4;
+            const bool valid = t < n_valid;
+
+            const int64_t off  = seq_qk * sq3 + (tok0 + t) * sq2 + head_qk * sq1 + s;
+            const float   dend = s_decay_end[t];
+            half kh[4];
+            half qh[4];
+#pragma unroll
+            for (int j = 0; j < 4; j++) {
+                const float kv = valid ? k[off + j] : 0.0f;
+                const float qv = valid ? q[off + j] * scale : 0.0f;
+                kh[j] = __float2half(kv);
+                qh[j] = __float2half(qv);
+                s_kt[(s + j) * CP + t] = __float2half(kv * dend);
+            }
+            memcpy(s_k + t * KP + s, kh, sizeof(kh));
+            memcpy(s_q + t * KP + s, qh, sizeof(qh));
+        }
+        __syncthreads();
+
+        // A = beta * K K^T * decay (j < i) and qk = Q K^T * decay (j <= i), one 16x16 tile per wave
+        {
+            const int    ib    = (wave / 2) % 2;
+            const int    jb    = wave % 2;
+            const bool   is_qk = wave >= 4;
+            const half * lhs   = is_qk ? s_q : s_k;
+
+            gdn_float8_t acc = zero;
+#pragma unroll
+            for (int ab = 0; ab < HEAD_DIM/16; ab++) {
+                acc = gdn_w_mma(gdn_w_load(lhs, KP, ib*16, ab*16, lane), gdn_w_load(s_k, KP, jb*16, ab*16, lane), acc);
+            }
+
+            const int   j   = jb*16 + ln;
+            const float g_j = s_g_cs[j];
+#pragma unroll
+            for (int l = 0; l < 8; l++) {
+                const int   i   = ib*16 + 2*l + hf;
+                const float dot = acc[l] * gdn_exp2(s_g_cs[i] - g_j);
+                if (is_qk) {
+                    s_qk[i * CP + j] = __float2half(j <= i ? dot : 0.0f);
+                } else {
+                    s_a[i][j] = j < i ? s_beta[i] * dot : 0.0f;
+                }
+            }
+        }
+        __syncthreads();
+
+        // Tinv = (I+A)^-1 by forward substitution, lane = row, 4 columns per wave
+        {
+            float x[4];
+#pragma unroll
+            for (int c4 = 0; c4 < 4; c4++) {
+                x[c4] = lane == wave*4 + c4 ? 1.0f : 0.0f;
+            }
+            for (int i = 0; i < CHUNK - 1; i++) {
+                const float a = s_a[lane][i]; // zero for i >= lane
+#pragma unroll
+                for (int c4 = 0; c4 < 4; c4++) {
+                    x[c4] -= a * __shfl_sync(0xffffffff, x[c4], i, WARP_SIZE);
+                }
+            }
+#pragma unroll
+            for (int c4 = 0; c4 < 4; c4++) {
+                // the unit diagonal is applied in fp32 below
+                s_tinv[lane * CP + wave*4 + c4] = __float2half(lane == wave*4 + c4 ? 0.0f : x[c4]);
+            }
+        }
+        __syncthreads();
+
+        // K*S and Q*S, rows r = rb*16 + 2*l + hf
+        gdn_float8_t Y[2]  = {zero, zero};
+        gdn_float8_t QS[2] = {zero, zero};
+        {
+#pragma unroll
+            for (int ab = 0; ab < HEAD_DIM/16; ab++) {
+                const gdn_half16_t B = gdn_w_operand(S[ab], lane);
+#pragma unroll
+                for (int rb = 0; rb < 2; rb++) {
+                    Y[rb]  = gdn_w_mma(gdn_w_load(s_k, KP, rb*16, ab*16, lane), B, Y[rb]);
+                    QS[rb] = gdn_w_mma(gdn_w_load(s_q, KP, rb*16, ab*16, lane), B, QS[rb]);
+                }
+            }
+        }
+
+        // Y = V*beta - K*beta*exp(g_cs) * S and Q*S*exp(g_cs)
+#pragma unroll
+        for (int rb = 0; rb < 2; rb++) {
+#pragma unroll
+            for (int l = 0; l < 8; l++) {
+                const int   r  = rb*16 + 2*l + hf;
+                const float vv = r < n_valid ? v[sequence * sv3 + (tok0 + r) * sv2 + head * sv1 + col] : 0.0f;
+                Y[rb][l]   = vv * s_beta[r] - s_beta_decay[r] * Y[rb][l];
+                QS[rb][l] *= s_decay[r];
+            }
+        }
+
+        // v_new = Tinv * Y = Y + (Tinv - I) * Y, Tinv is unit lower triangular
+        gdn_half16_t B0;
+        gdn_half16_t B1;
+        {
+            const gdn_half16_t Y0 = gdn_w_operand(Y[0], lane);
+            const gdn_half16_t Y1 = gdn_w_operand(Y[1], lane);
+            Y[0] = gdn_w_mma(gdn_w_load(s_tinv, CP,  0,  0, lane), Y0, Y[0]);
+            Y[1] = gdn_w_mma(gdn_w_load(s_tinv, CP, 16,  0, lane), Y0, Y[1]);
+            Y[1] = gdn_w_mma(gdn_w_load(s_tinv, CP, 16, 16, lane), Y1, Y[1]);
+            B0 = gdn_w_operand(Y[0], lane);
+            B1 = gdn_w_operand(Y[1], lane);
+        }
+
+        // out = Q*S*exp(g_cs) + qk * v_new
+        QS[0] = gdn_w_mma(gdn_w_load(s_qk, CP,  0,  0, lane), B0, QS[0]);
+        QS[1] = gdn_w_mma(gdn_w_load(s_qk, CP, 16,  0, lane), B0, QS[1]);
+        QS[1] = gdn_w_mma(gdn_w_load(s_qk, CP, 16, 16, lane), B1, QS[1]);
+#pragma unroll
+        for (int rb = 0; rb < 2; rb++) {
+#pragma unroll
+            for (int l = 0; l < 8; l++) {
+                const int i = rb*16 + 2*l + hf;
+                if (i < n_valid) {
+                    dst[((int64_t) sequence * n_tokens + tok0 + i) * n_heads * HEAD_DIM + (int64_t) head * HEAD_DIM + col] = QS[rb][l];
+                }
+            }
+        }
+
+        // S = S*exp(g_last) + K^T*exp(g_last - g_cs) * v_new
+        {
+            const float chunk_decay = gdn_exp2(s_g_cs[CHUNK - 1]);
+#pragma unroll
+            for (int ab = 0; ab < HEAD_DIM/16; ab++) {
+                S[ab] = S[ab] * chunk_decay;
+                S[ab] = gdn_w_mma(gdn_w_load(s_kt, CP, ab*16,  0, lane), B0, S[ab]);
+                S[ab] = gdn_w_mma(gdn_w_load(s_kt, CP, ab*16, 16, lane), B1, S[ab]);
+            }
+        }
+    }
+
+    const int64_t state_out_off = ((int64_t) sequence * n_heads + head) * HEAD_DIM * HEAD_DIM + (int64_t) col * HEAD_DIM;
+#pragma unroll
+    for (int ab = 0; ab < HEAD_DIM/16; ab++) {
+#pragma unroll
+        for (int l = 0; l < 8; l++) {
+            state_out[state_out_off + ab*16 + 2*l + hf] = S[ab][l] * (1.0f / GDN_W_SSCALE);
+        }
+    }
+#else
+    GGML_UNUSED_VARS(q, k, v, g, beta, state_in, dst, state_out, n_tokens, n_heads, sq1, sq2, sq3, sv1, sv2, sv3, sb1, sb2, sb3,
+        neqk1_magic, rq3_magic, scale);
+    NO_DEVICE_CODE;
+#endif // defined(GGML_USE_HIP) && defined(RDNA3_5)
+}
+
 void ggml_cuda_gdn_chunked(ggml_backend_cuda_context & ctx, const ggml_cuda_gdn_chunked_args & args) {
     GGML_ASSERT(args.S_v == GDN_HEAD_DIM);
 
@@ -427,6 +703,17 @@ void ggml_cuda_gdn_chunked(ggml_backend_cuda_context & ctx, const ggml_cuda_gdn_
     const uint3 rq3_magic   = init_fastdiv_values(args.rq3);
 
     const dim3 block_nums(args.H, args.n_seqs, 1);
+#if defined(GGML_USE_HIP)
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_GDN_WMMA, false)) {
+        const ggml_cuda_kernel_launch_params launch_params_wmma(block_nums, dim3(GDN_W_THREADS, 1, 1), 0, ctx.stream());
+        ggml_cuda_kernel_launch(gdn_chunked_wmma, launch_params_wmma,
+            args.q, args.k, args.v, args.g, args.beta, args.state_in, args.dst, args.state_out,
+            args.n_tokens, args.H,
+            args.sq1, args.sq2, args.sq3, args.sv1, args.sv2, args.sv3, args.sb1, args.sb2, args.sb3,
+            neqk1_magic, rq3_magic, args.scale);
+        return;
+    }
+#endif
     const dim3 block_dims(GDN_BLOCK_SIZE, 1, 1);
 
     const ggml_cuda_kernel_launch_params launch_params(block_nums, block_dims, 0, ctx.stream());

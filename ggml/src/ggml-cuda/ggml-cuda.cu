@@ -4940,6 +4940,39 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    // MUL_MAT -> RESHAPE -> CONCAT (second input, dim 1): the matmul writes into the concat output, only the first input is copied
+    if (GGML_CUDA_OPT_ENABLED(GGML_CUDA_FUSE_MM_CONCAT, false) && node->op == GGML_OP_MUL_MAT) {
+        const ggml_op ops[] = { GGML_OP_MUL_MAT, GGML_OP_RESHAPE, GGML_OP_CONCAT };
+        const int output_idx = i + 2;
+        if (ggml_can_fuse_subgraph(cgraph, i, 3, ops, &output_idx, 1)) {
+            const ggml_tensor * reshape = cgraph->nodes[i + 1];
+            ggml_tensor * concat = cgraph->nodes[output_idx];
+            const ggml_tensor * head = concat->src[0];
+            const size_t offset = ggml_nbytes(head);
+            if (reshape->src[0] == node && concat->src[1] == reshape && ggml_get_op_params_i32(concat, 0) == 1 &&
+                    node->type == GGML_TYPE_F32 && head->type == GGML_TYPE_F32 && concat->type == GGML_TYPE_F32 &&
+                    ggml_is_contiguous(node) && ggml_is_contiguous(head) && ggml_is_contiguous(concat) &&
+                    concat->ne[2] == 1 && concat->ne[3] == 1 && head->ne[0] == node->ne[0] &&
+                    offset % 16 == 0 && offset + ggml_nbytes(node) == ggml_nbytes(concat)) {
+                ggml_tensor dst = *node;
+                dst.data = (char *) concat->data + offset;
+                dst.buffer = concat->buffer;
+                bool overlap = false;
+                const uintptr_t begin = (uintptr_t) concat->data;
+                const uintptr_t end = begin + ggml_nbytes(concat);
+                for (const ggml_tensor * src : { (const ggml_tensor *) node->src[0], (const ggml_tensor *) node->src[1], head }) {
+                    const uintptr_t src_begin = (uintptr_t) src->data;
+                    overlap = overlap || (begin < src_begin + ggml_nbytes(src) && src_begin < end);
+                }
+                if (!overlap) {
+                    ggml_cuda_mul_mat(*cuda_ctx, dst.src[0], dst.src[1], &dst);
+                    CUDA_CHECK(cudaMemcpyAsync(concat->data, head->data, offset, cudaMemcpyDeviceToDevice, cuda_ctx->stream()));
+                    return 2;
+                }
+            }
+        }
+    }
+
     static const bool fuse_attn_set = ggml_cuda_env_int("GGML_CUDA_FUSE_ATTN_SET", 1) != 0;
     if (fuse_attn_set && node->op == GGML_OP_FLASH_ATTN_EXT && GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const ggml_op ops[] = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_RESHAPE, GGML_OP_SET };
