@@ -49,6 +49,22 @@ static bool hipep_env(const char * name) {
     return value != nullptr && *value != 0 && std::strcmp(value, "0") != 0;
 }
 
+// the environment, read once
+struct hipep_options {
+    bool wait       = hipep_env("HIPEP_BACKEND_WAIT");
+    bool log        = hipep_env("HIPEP_BACKEND_LOG");
+    bool profile    = hipep_env("HIPEP_BACKEND_PROFILE");
+    bool precompile = [] {
+        const char * value = std::getenv("HIPEP_BACKEND_PRECOMPILE");
+        return value == nullptr || std::strcmp(value, "0") != 0;
+    }();
+};
+
+static const hipep_options & hipep_opts() {
+    static const hipep_options options;
+    return options;
+}
+
 struct hipep_device_context {
     ggml_backend_dev_t rocm  = nullptr;
     int                index = 0;
@@ -141,14 +157,14 @@ static const char * ggml_backend_hipep_get_name(ggml_backend_t backend) {
 
 static void ggml_backend_hipep_free(ggml_backend_t backend) {
     auto * ctx = static_cast<hipep_backend_context *>(backend->context);
-    if (hipep_env("HIPEP_BACKEND_LOG") || hipep_env("HIPEP_BACKEND_PROFILE")) {
+    if (hipep_opts().log || hipep_opts().profile) {
         fprintf(stderr, "%s: %lld splits, %lld by compiled code, %lld by ggml-hip; collecting %.3f s, waiting %.3f s, "
                       "compiled %.3f s, ggml-hip %.3f s\n",
                       ctx->device->name.c_str(), (long long) ctx->splits, (long long) ctx->compiled,
                       (long long) ctx->fallback, ctx->collect_seconds, ctx->wait_seconds, ctx->run_seconds,
                       ctx->fallback_seconds);
     }
-    if (hipep_env("HIPEP_BACKEND_PROFILE")) {
+    if (hipep_opts().profile) {
         std::vector<std::pair<std::string, hipep_profile>> rows(ctx->profile.begin(), ctx->profile.end());
         std::sort(rows.begin(), rows.end(),
                   [](const auto & a, const auto & b) { return a.second.seconds > b.second.seconds; });
@@ -298,7 +314,7 @@ static std::vector<hipep_segment> hipep_segments_of(hipep_backend_ctx * sdk, con
             }
             segment.failed = segment.split.nodes.empty() || !hipep_collect_split(segment.split, segment.tensors);
             segment.data.resize(segment.tensors.tensors.size());
-            if (hipep_env("HIPEP_BACKEND_PROFILE") || hipep_env("HIPEP_BACKEND_LOG")) {
+            if (hipep_opts().profile || hipep_opts().log) {
                 segment.ops = hipep_ops_of(segment.split);
             }
         }
@@ -322,10 +338,8 @@ static std::vector<hipep_segment> hipep_segments_of(hipep_backend_ctx * sdk, con
 // device - never runs: its splits are not compiled
 static void ggml_backend_hipep_graph_optimize(ggml_backend_t backend, ggml_cgraph * graph,
                                               ggml_backend_graph_optimize_params * params) {
-    auto *       ctx      = static_cast<hipep_backend_context *>(backend->context);
-    const char * disabled = std::getenv("HIPEP_BACKEND_PRECOMPILE");
-    if (ctx->splits > 0 || (params != nullptr && params->split_only) ||
-        (disabled != nullptr && std::strcmp(disabled, "0") == 0)) {
+    auto * ctx = static_cast<hipep_backend_context *>(backend->context);
+    if (ctx->splits > 0 || (params != nullptr && params->split_only) || !hipep_opts().precompile) {
         return;
     }
     hipep_backend_ctx * sdk = ctx->device->open();
@@ -352,7 +366,7 @@ static bool hipep_run_compiled(hipep_backend_context * ctx,
         const hipep_backend_split_desc desc = segment.tensors.desc();
         segment.code                        = hipep_backend_find(sdk, &desc);
         if (segment.code == nullptr && !segment.asked) {
-            segment.code  = hipep_backend_compile(sdk, &desc, hipep_env("HIPEP_BACKEND_WAIT"));
+            segment.code  = hipep_backend_compile(sdk, &desc, hipep_opts().wait);
             segment.asked = true;
         }
         if (segment.code == nullptr) {
@@ -419,13 +433,13 @@ static ggml_status ggml_backend_hipep_graph_compute(ggml_backend_t backend, ggml
         const double seconds = since(start);
         ++(ran ? ctx->compiled : ctx->fallback);
         (ran ? ctx->run_seconds : ctx->fallback_seconds) += seconds;
-        if (hipep_env("HIPEP_BACKEND_PROFILE")) {
+        if (hipep_opts().profile) {
             hipep_profile & p = ctx->profile[std::string(ran ? "compiled " : "ggml-hip ") +
                                              (segment.compiled ? segment.ops : std::string("(not compiled)"))];
             ++p.runs;
             p.seconds += seconds;
         }
-        if (hipep_env("HIPEP_BACKEND_LOG")) {
+        if (hipep_opts().log) {
             fprintf(stderr, "%s: split (%d nodes): %s%s%s\n", ctx->device->name.c_str(), segment.end - segment.begin,
                     ran ? "compiled" : "ggml-hip", why.empty() ? "" : ": ", why.c_str());
         }
@@ -554,11 +568,24 @@ static ggml_backend_dev_t ggml_backend_hipep_reg_get_device(ggml_backend_reg_t, 
     return index < hipep_devices().size() ? &hipep_devices()[index] : nullptr;
 }
 
+// the scheduler marks what each split hands on (GGML_TENSOR_FLAG_SPLIT_OUTPUT): what compiled code writes
+static bool ggml_backend_hipep_reads_split_outputs() {
+    return true;
+}
+
+static void * ggml_backend_hipep_reg_get_proc_address(ggml_backend_reg_t, const char * name) {
+    if (std::strcmp(name, "ggml_backend_reads_split_outputs") == 0) {
+        return reinterpret_cast<void *>(static_cast<ggml_backend_reads_split_outputs_t>(
+            ggml_backend_hipep_reads_split_outputs));
+    }
+    return nullptr;
+}
+
 static const ggml_backend_reg_i ggml_backend_hipep_reg_interface = {
     /* .get_name         = */ ggml_backend_hipep_reg_get_name,
     /* .get_device_count = */ ggml_backend_hipep_reg_get_device_count,
     /* .get_device       = */ ggml_backend_hipep_reg_get_device,
-    /* .get_proc_address = */ nullptr,
+    /* .get_proc_address = */ ggml_backend_hipep_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_hipep_reg(void) {
@@ -584,7 +611,7 @@ ggml_backend_reg_t ggml_backend_hipep_reg(void) {
         for (size_t i = 0; i < contexts.size(); ++i) {
             hipep_device_context & c = contexts[i];
             c.rocm                   = ggml_backend_reg_dev_get(rocm, i);
-            c.index                  = std::atoi(ggml_backend_dev_name(c.rocm) + 4);
+            c.index                  = static_cast<int>(i); // ggml-hip's device i is HIP device i
             c.name                   = GGML_HIPEP_NAME + std::to_string(c.index);
             c.description = std::string("hip-ep compiled splits over ") + ggml_backend_dev_name(c.rocm);
             c.buft        = *ggml_backend_dev_buffer_type(c.rocm);

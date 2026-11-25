@@ -1238,6 +1238,10 @@ struct ggml_backend_sched {
 
     bool op_offload;
 
+    // a backend reads GGML_TENSOR_FLAG_SPLIT_OUTPUT (its registry's "ggml_backend_reads_split_outputs" says so):
+    // the splits' outputs are marked
+    bool mark_split_outputs;
+
     int debug;
 
     // graph size of the current and the previous scheduling, used by the realloc callback and for debugging
@@ -1899,7 +1903,7 @@ static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, stru
 
     // the nodes a later split reads, directly or through a view: what a split hands on, whatever memory the
     // allocator leaves alive after it (a backend that compiles its splits writes those, and no more)
-    {
+    if (sched->mark_split_outputs) {
         std::unordered_map<const ggml_tensor *, int> split_of;
         for (int i = 0; i < sched->n_splits; i++) {
             for (int j = sched->splits[i].i_start; j < sched->splits[i].i_end; j++) {
@@ -1933,7 +1937,7 @@ static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, stru
     for (int i = 0; i < sched->n_splits; i++) {
         struct ggml_backend_sched_split * split = &sched->splits[i];
         split->graph = ggml_graph_view(graph, split->i_start, split->i_end);
-        split->graph.from_sched = true;
+        split->graph.from_sched = sched->mark_split_outputs;
 
         ggml_backend_graph_optimize(sched->backends[split->backend_id], &split->graph, &opt_params);
     }
@@ -2397,6 +2401,12 @@ ggml_backend_sched_t ggml_backend_sched_new(
                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
             }
         }
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[b]);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        auto reads_split_outputs = reg ? (ggml_backend_reads_split_outputs_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_reads_split_outputs") : nullptr;
+        sched->mark_split_outputs |= reads_split_outputs != nullptr && reads_split_outputs();
     }
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);

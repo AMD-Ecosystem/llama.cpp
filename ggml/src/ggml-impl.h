@@ -364,7 +364,8 @@ struct ggml_cgraph {
     // a value of 0 means it is not set and should be ignored
     uint64_t uid;
 
-    // a split the scheduler made: GGML_TENSOR_FLAG_SPLIT_OUTPUT marks its outputs
+    // a split the scheduler made with its outputs marked (GGML_TENSOR_FLAG_SPLIT_OUTPUT): a backend of the
+    // scheduler reads them
     bool from_sched;
 };
 

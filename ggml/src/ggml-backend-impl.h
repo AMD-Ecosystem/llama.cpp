@@ -130,6 +130,10 @@ extern "C" {
         bool split_only;
     };
 
+    // whether the backends of a registry read GGML_TENSOR_FLAG_SPLIT_OUTPUT, which the scheduler then sets
+    // (ggml_backend_reg_get_proc_address(reg, "ggml_backend_reads_split_outputs"))
+    typedef bool (*ggml_backend_reads_split_outputs_t)(void);
+
     struct ggml_backend_i {
         const char * (*get_name)(ggml_backend_t backend);
 
