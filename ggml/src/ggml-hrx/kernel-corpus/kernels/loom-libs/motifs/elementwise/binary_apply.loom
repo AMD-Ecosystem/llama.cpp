@@ -1,6 +1,8 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
+config.def @ggml.swiglu_clamp.limit = 0.0 : f32
+
 template.decl @ggml.binary_f32.apply(%op: index, %lhs: f32, %rhs: f32) -> (f32)
 
 template.def<@ggml.binary_f32.apply> device priority(1) @ggml_binary_f32_apply(%op: index, %lhs: f32, %rhs: f32) -> (f32) {
@@ -38,16 +40,36 @@ template.def<@ggml.binary_f32.apply> device priority(1) @ggml_binary_f32_apply(%
   %is_div = index.cmp eq, %op, %op_div : index
   %div_selected = scf.select %is_div, %quotient, %mul_selected : f32
 
-  // SWIGLU (op 4): silu(x) * y.
+  // SWIGLU (op 4) and SWIGLU_CLAMP (op 9).
   %op_swiglu = index.constant 4 : index
-  %silu_negative = scalar.negf %lhs : f32
+  %op_swiglu_clamp = index.constant 9 : index
+  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
+  %is_swiglu_clamp = index.cmp eq, %op, %op_swiglu_clamp : index
+  %gate, %up = scf.if %is_swiglu_clamp -> (f32, f32) {
+    %limit = config.get @ggml.swiglu_clamp.limit : f32
+    %lower = scalar.negf %limit : f32
+    %bounded_gate = scalar.minnumf %lhs, %limit : f32
+    %bounded_up_lower = scalar.maxnumf %rhs, %lower : f32
+    %bounded_up = scalar.minnumf %bounded_up_lower, %limit : f32
+    scf.yield %bounded_gate, %bounded_up : f32, f32
+  } else {
+    scf.yield %lhs, %rhs : f32, f32
+  }
+  %silu_negative = scalar.negf %gate : f32
   %silu_exp = scalar.expf<afn> %silu_negative : f32
   %silu_denominator = scalar.addf %c1_f32, %silu_exp : f32
-  %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
-  %silu = scalar.mulf %lhs, %silu_sigmoid : f32
-  %swiglu = scalar.mulf %silu, %rhs : f32
-  %is_swiglu = index.cmp eq, %op, %op_swiglu : index
-  %swiglu_selected = scf.select %is_swiglu, %swiglu, %div_selected : f32
+  // Preserve the original rounding of the two scalar paths.
+  %silu = scf.if %is_swiglu_clamp -> (f32) {
+    %activated = scalar.divf %gate, %silu_denominator : f32
+    scf.yield %activated : f32
+  } else {
+    %silu_sigmoid = scalar.divf %c1_f32, %silu_denominator : f32
+    %activated = scalar.mulf %gate, %silu_sigmoid : f32
+    scf.yield %activated : f32
+  }
+  %swiglu = scalar.mulf %silu, %up : f32
+  %swiglu_or_clamp = scf.select %is_swiglu_clamp, %swiglu, %div_selected : f32
+  %swiglu_selected = scf.select %is_swiglu, %swiglu, %swiglu_or_clamp : f32
 
   // GEGLU (op 5): gelu(x) * y.
   %op_geglu = index.constant 5 : index

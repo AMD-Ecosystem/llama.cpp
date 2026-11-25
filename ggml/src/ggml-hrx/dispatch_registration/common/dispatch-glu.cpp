@@ -208,9 +208,21 @@ static bool match_swiglu_clamp_f32_dispatch(const DispatchMatchContext & context
         return false;
     }
     Dispatch dispatch;
-    dispatch.kernel = make_kernel_specialization(GGML_HRX_KERNEL_REF("loom_libs", "ggml_swiglu_clamp_f32"));
+    dispatch.kernel = make_kernel_specialization(kBinaryF32Kernel);
     dispatch.kernel.integer_parameters.emplace("element_count", output->element_count);
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.op", "9");
     dispatch.kernel.compile_parameters.emplace("ggml.swiglu_clamp.limit", float_config_value(params->limit));
+    // Flatten the contiguous inputs so each source index equals the output index.
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne0", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne1", "1");
+    dispatch.kernel.compile_parameters.emplace("ggml.binary_f32.ne2", "1");
+    for (const char * prefix : { "ggml.binary_f32.src0_", "ggml.binary_f32.src1_" }) {
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + "stride0", "0");
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + "stride1", "0");
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + "stride2", "0");
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + "stride3", "1");
+        dispatch.kernel.compile_parameters.emplace(std::string(prefix) + "span", std::to_string(output->element_count));
+    }
     dispatch.bindings = {
         { gate->id,   0, gate->byte_count   },
         { up->id,     0, up->byte_count     },
