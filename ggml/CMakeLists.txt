@@ -264,6 +264,10 @@ set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
 option(GGML_HIPEP                           "ggml: use hip-ep's compiled splits (over HIP)"   OFF)
+if (GGML_HIPEP)
+    # HIPEP runs over ggml-hip: its devices, buffers and what it does not compile are ggml-hip's
+    set(GGML_HIP ON)
+endif()
 option(GGML_ET                              "ggml: use ET backend"                            OFF)
 option(GGML_ET_SYSEMU                       "ggml: use ET backend via sysemu"                 OFF)
 
