@@ -10,6 +10,7 @@ func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
 func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
 
 func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
+func.decl @ggml_routed_uses_codebook(%format: index) -> (i1)
 func.decl @ggml_codebook_f16_vector4(%weight_format: index, %codebook: buffer, %weight: buffer, %row_byte_base: offset, %quant_block: index, %quant_group: index, %packet: index) -> (vector<4xf16>)
 
 func.def inline @ggml_moe_unpack_expert_partition_descriptor(%descriptor: i32) -> (index, index, index) {
@@ -59,9 +60,6 @@ template.def<@ggml.matmul_id.pair_f32_swiglu.body> device @ggml_mul_mat_id_pair_
   %c64 = index.constant 64 : index
   %c255 = index.constant 255 : index
   %c256 = index.constant 256 : index
-  %iq2_xxs_format = index.constant 24 : index
-  %iq1_s_format = index.constant 19 : index
-  %iq3_xxs_format = index.constant 18 : index
   %c0_offset = index.constant 0 : offset
   %c4_bytes = index.constant 4 : offset
   %weight_stage_bytes = index.constant 5120 : offset
@@ -93,16 +91,8 @@ template.def<@ggml.matmul_id.pair_f32_swiglu.body> device @ggml_mul_mat_id_pair_
   %up_weight_row_bytes = func.call @ggml_dequant_weight_row_bytes(%up_weight_format, %bounded_input_size) : (index, index) -> (offset)
   %gate_weight_expert_bytes = index.scale %bounded_output_size, %gate_weight_row_bytes : index, offset -> offset
   %up_weight_expert_bytes = index.scale %bounded_output_size, %up_weight_row_bytes : index, offset -> offset
-  %gate_uses_iq3_xxs = index.cmp eq, %gate_weight_format, %iq3_xxs_format : index
-  %gate_uses_iq1_s = index.cmp eq, %gate_weight_format, %iq1_s_format : index
-  %gate_uses_iq1_or_iq3 = scalar.ori %gate_uses_iq1_s, %gate_uses_iq3_xxs : i1
-  %gate_uses_iq2_xxs = index.cmp eq, %gate_weight_format, %iq2_xxs_format : index
-  %gate_uses_codebook = scalar.ori %gate_uses_iq1_or_iq3, %gate_uses_iq2_xxs : i1
-  %up_uses_iq3_xxs = index.cmp eq, %up_weight_format, %iq3_xxs_format : index
-  %up_uses_iq1_s = index.cmp eq, %up_weight_format, %iq1_s_format : index
-  %up_uses_iq1_or_iq3 = scalar.ori %up_uses_iq1_s, %up_uses_iq3_xxs : i1
-  %up_uses_iq2_xxs = index.cmp eq, %up_weight_format, %iq2_xxs_format : index
-  %up_uses_codebook = scalar.ori %up_uses_iq1_or_iq3, %up_uses_iq2_xxs : i1
+  %gate_uses_codebook = func.call @ggml_routed_uses_codebook(%gate_weight_format) : (index) -> (i1)
+  %up_uses_codebook = func.call @ggml_routed_uses_codebook(%up_weight_format) : (index) -> (i1)
   %input_noalias, %expert_table_noalias, %partition_table_noalias, %gate_weight_noalias, %up_weight_noalias, %output_noalias = buffer.assume.noalias %input, %expert_table, %partition_table, %gate_weight, %up_weight, %output : buffer, buffer, buffer, buffer, buffer, buffer
   %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_input_route_count]x[%bounded_input_size]xf32>
   %assignment_view = buffer.view %expert_table_noalias[%assignment_table_byte_base] : buffer -> view<[%bounded_expert_count]x[%bounded_token_count]xi32>

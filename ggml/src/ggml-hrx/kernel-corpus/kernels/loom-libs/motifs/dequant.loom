@@ -2220,6 +2220,21 @@ func.def inline @ggml_iq1m_global_f32_vector4(%grid: buffer, %weight: buffer, %r
   func.return %result : vector<4xf32>
 }
 
+func.def public inline @ggml_routed_uses_codebook(%format: index) -> (i1) {
+  %iq1_s = index.constant 19 : index
+  %iq2_xxs = index.constant 24 : index
+  %iq2_xs = index.constant 25 : index
+  %iq3_xxs = index.constant 18 : index
+  %is_iq1 = index.cmp eq, %format, %iq1_s : index
+  %is_iq2_xxs = index.cmp eq, %format, %iq2_xxs : index
+  %is_iq2_xs = index.cmp eq, %format, %iq2_xs : index
+  %is_iq3 = index.cmp eq, %format, %iq3_xxs : index
+  %is_iq2 = scalar.ori %is_iq2_xxs, %is_iq2_xs : i1
+  %is_iq1_or_iq3 = scalar.ori %is_iq1, %is_iq3 : i1
+  %uses_grid = scalar.ori %is_iq2, %is_iq1_or_iq3 : i1
+  func.return %uses_grid : i1
+}
+
 func.def public inline @ggml_codebook_f32_vector4(%weight_format: index, %codebook: buffer, %weight: buffer, %row_byte_base: offset, %quant_block: index, %quant_group: index, %packet: index) -> (vector<4xf32>) {
   %iq1_s_format = index.constant 19 : index
   %iq3_xxs_format = index.constant 18 : index

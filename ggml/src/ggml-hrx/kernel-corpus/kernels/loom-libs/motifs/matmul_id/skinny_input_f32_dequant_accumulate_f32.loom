@@ -15,6 +15,7 @@ func.decl @ggml_iq4nl_table_i8() -> (vector<16xi8>)
 
 func.decl @ggml_iq3s_grid_f32_halves() -> (vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>, vector<32xf32>)
 
+func.decl @ggml_routed_uses_codebook(%format: index) -> (i1)
 func.decl @ggml_codebook_f16_vector4(%format: index, %grid: buffer, %weight: buffer, %row_base: offset, %block: index, %group: index, %packet: index) -> (vector<4xf16>)
 func.decl @ggml_dequant_f16_vector4(%iq4nl_table: vector<16xi8>, %iq3s_grid_low0: vector<32xf32>, %iq3s_grid_low1: vector<32xf32>, %iq3s_grid_low2: vector<32xf32>, %iq3s_grid_low3: vector<32xf32>, %iq3s_grid_low4: vector<32xf32>, %iq3s_grid_low5: vector<32xf32>, %iq3s_grid_low6: vector<32xf32>, %iq3s_grid_low7: vector<32xf32>, %iq3s_grid_low8: vector<32xf32>, %iq3s_grid_low9: vector<32xf32>, %iq3s_grid_low10: vector<32xf32>, %iq3s_grid_low11: vector<32xf32>, %iq3s_grid_low12: vector<32xf32>, %iq3s_grid_low13: vector<32xf32>, %iq3s_grid_low14: vector<32xf32>, %iq3s_grid_low15: vector<32xf32>, %iq3s_grid_high0: vector<32xf32>, %iq3s_grid_high1: vector<32xf32>, %iq3s_grid_high2: vector<32xf32>, %iq3s_grid_high3: vector<32xf32>, %iq3s_grid_high4: vector<32xf32>, %iq3s_grid_high5: vector<32xf32>, %iq3s_grid_high6: vector<32xf32>, %iq3s_grid_high7: vector<32xf32>, %iq3s_grid_high8: vector<32xf32>, %iq3s_grid_high9: vector<32xf32>, %iq3s_grid_high10: vector<32xf32>, %iq3s_grid_high11: vector<32xf32>, %iq3s_grid_high12: vector<32xf32>, %iq3s_grid_high13: vector<32xf32>, %iq3s_grid_high14: vector<32xf32>, %iq3s_grid_high15: vector<32xf32>, %weight_format: index, %weight: buffer, %row_byte_base: offset, %input_size: index, %quant_block: index, %quant_group: index, %packet: index, %k: index) -> (vector<4xf16>)
 
@@ -182,14 +183,7 @@ template.def<@ggml.matmul_id.skinny_f32_f32.core> device @ggml_mul_mat_id_skinny
           %weight_values = scf.if %valid_weight -> (vector<4xf16>) {
             %channel_byte_add = index.scale %channel, %weight_row_bytes : index, offset -> offset
             %row_byte_base = index.add %expert_byte_base, %channel_byte_add : offset
-            %iq1_format = index.constant 19 : index
-            %iq2_format = index.constant 24 : index
-            %iq3_format = index.constant 18 : index
-            %uses_iq1 = index.cmp eq, %weight_format, %iq1_format : index
-            %uses_iq2 = index.cmp eq, %weight_format, %iq2_format : index
-            %uses_iq3 = index.cmp eq, %weight_format, %iq3_format : index
-            %uses_iq1_or_iq2 = scalar.ori %uses_iq1, %uses_iq2 : i1
-            %uses_grid = scalar.ori %uses_iq1_or_iq2, %uses_iq3 : i1
+            %uses_grid = func.call @ggml_routed_uses_codebook(%weight_format) : (index) -> (i1)
             %decoded = scf.if %uses_grid -> (vector<4xf16>) {
               %values = func.call @ggml_codebook_f16_vector4(%weight_format, %grid, %weight_noalias, %row_byte_base, %quant_block, %quant_group, %load_packet) : (index, buffer, buffer, offset, index, index, index) -> (vector<4xf16>)
               scf.yield %values : vector<4xf16>
