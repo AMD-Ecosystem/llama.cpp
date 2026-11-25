@@ -13114,6 +13114,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {1, 37, 1, 1}, ne_b_d, 0, 16));
     }
     test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {64, 37, 1, 1}, 32, 0, 16));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {9, 10240, 1, 1}, 2048, 0, 16));
     // Empty src0
     test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {0, 64, 1, 1}, 33, 0, 16));
 
@@ -14064,6 +14065,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, channels, 1, 1}, n_tokens, 0, 16));
         }
     }
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {9, 10240, 1, 1}, 2048, 0, 16));
     // the same conv input fused into the conv, and the unfused conv it replaces
     for (int64_t n_tokens : {512, 2048}) {
         test_cases.emplace_back(new test_ssm_conv_concat(4, 10240, n_tokens, 1, false, true, false));
