@@ -119,8 +119,8 @@ static bool is_profile_rms_norm_epsilon(float eps) {
     return eps >= expected * 0.9f && eps <= expected * 1.1f;
 }
 
-static bool is_routed_ffn_gate_up_weight(const Value & value) {
-    return (value.type == GGML_TYPE_Q4_K || value.type == GGML_TYPE_Q6_K) && value.contiguous &&
+static bool is_q4k_vector_gate_up_weight(const Value & value) {
+    return value.type == GGML_TYPE_Q4_K && value.contiguous &&
            is_shape(value, kRoutedFfnInputSize, kRoutedFfnExpertHiddenSize, kRoutedFfnExpertCount, 1);
 }
 
@@ -427,7 +427,7 @@ static bool match_same_route_projection(const Graph &     graph,
     }
     weight = graph_value(graph, node.inputs[0]);
     output = graph_value(graph, node.output);
-    return weight != nullptr && output != nullptr && is_routed_ffn_gate_up_weight(*weight) &&
+    return weight != nullptr && output != nullptr && is_q4k_vector_gate_up_weight(*weight) &&
            is_routed_ffn_projection_output(*output, token_count);
 }
 
@@ -626,7 +626,7 @@ static DecodeRoutedGateUpMatch match_decode_routed_ffn_gate_up_swiglu(const Disp
     const Value * route_ids   = graph_value(context.graph, root->inputs[2]);
     const Value * root_output = graph_value(context.graph, root->output);
     if (root_weight == nullptr || input == nullptr || route_ids == nullptr || root_output == nullptr ||
-        !is_routed_ffn_gate_up_weight(*root_weight) || input->type != GGML_TYPE_F32 || !input->contiguous ||
+        !is_q4k_vector_gate_up_weight(*root_weight) || input->type != GGML_TYPE_F32 || !input->contiguous ||
         !is_shape(*input, kRoutedFfnInputSize, 1, 1, 1) || route_ids->type != GGML_TYPE_I32 ||
         !is_shape(*route_ids, kRoutedFfnRouteCount, 1, 1, 1) || !is_routed_ffn_projection_output(*root_output, 1)) {
         return {};

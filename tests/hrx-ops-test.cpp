@@ -9837,7 +9837,13 @@ static void run_routed_pair_cpu_reference_case(ggml_type gate_type, ggml_type up
     ggml_backend_free(hrx_backend);
 }
 
-static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bool alias_gate_input = false,
+struct DecodeRoutedWeightTypes {
+    ggml_type down;
+    ggml_type gate = GGML_TYPE_Q4_K;
+    ggml_type up   = GGML_TYPE_Q4_K;
+};
+
+static void run_decode_routed_moe_scheduling_case(DecodeRoutedWeightTypes weights, bool alias_gate_input = false,
                                                 bool final_projection = false, bool observable_down = false,
                                                 bool observable_residual_input = false, bool duplicate_route = false,
                                                 bool alias_residual_input = false) {
@@ -9871,11 +9877,11 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     REQUIRE(route_weights != nullptr);
 
     ggml_tensor * gate_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, weights.gate, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     ggml_tensor * up_weight =
-        ggml_new_tensor_3d(ctx, GGML_TYPE_Q4_K, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, weights.up, kQwenHiddenSize, kQwenMoeIntermediate, kQwenRouterExpertCount);
     ggml_tensor * down_weight =
-        ggml_new_tensor_3d(ctx, down_weight_type, kQwenMoeIntermediate, kQwenHiddenSize, kQwenRouterExpertCount);
+        ggml_new_tensor_3d(ctx, weights.down, kQwenMoeIntermediate, kQwenHiddenSize, kQwenRouterExpertCount);
     REQUIRE(gate_weight != nullptr);
     REQUIRE(up_weight != nullptr);
     REQUIRE(down_weight != nullptr);
@@ -9939,9 +9945,9 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
     std::vector<std::string> expected = {
         "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4",
         "qwen3_moe:qwen3_moe_router_projection_top8_fused_decode_f32",
-        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8" :
+        weights.down == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_q8" :
                                              "loom_libs:ggml_mul_mat_id_vector_pair_binary_publish_f32",
-        down_weight_type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8" :
+        weights.down == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_id_vector_weighted_wave32_publish_q8" :
                                              "loom_libs:ggml_mul_mat_id_vector_weighted_wave64_publish_q8",
     };
     if (final_projection) {
@@ -9952,8 +9958,11 @@ static void run_decode_routed_moe_scheduling_case(ggml_type down_weight_type, bo
         if (should_fuse) {
             require_kernel_subsequence(kernels, { fused, "qwen3_moe:qwen3_moe_rmsnorm_f32_quantize_q8_1_x4" });
         }
-    } else {
+    } else if (weights.gate == GGML_TYPE_Q4_K && weights.up == GGML_TYPE_Q4_K) {
         require_kernel_subsequence(scheduled_kernel_sequence(graph), expected);
+    } else {
+        require_kernel_subsequence(scheduled_kernel_sequence(graph),
+                                   { "loom_libs:ggml_mul_mat_id_skinny_pair_input_f32_swiglu_publish_f32" });
     }
     ggml_free(ctx);
 }
@@ -11528,25 +11537,34 @@ static void register_rmsnorm_and_scheduling_cases(Suite & suite) {
     suite.device_case("flash_attention.asymmetric", [] { run_asymmetric_flash_attention_cpu_reference_case(); });
     suite.device_case("routed_moe.q6_k", [] { run_routed_moe_cpu_reference_case(GGML_TYPE_Q6_K, false); });
     suite.device_case("decode_attention_qkv.scheduling", [] { run_decode_attention_qkv_scheduling_case(); });
-    suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q4_K); });
-    suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K); });
+    suite.device_case("decode_routed_moe.q6_k_gate_up", [] {
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K, GGML_TYPE_Q6_K, GGML_TYPE_Q6_K });
+    });
+    suite.device_case("decode_routed_moe.q6_k_gate", [] {
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q4_K });
+    });
+    suite.device_case("decode_routed_moe.q6_k_up", [] {
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q4_K, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K });
+    });
+    suite.device_case("decode_routed_moe.q4_k", [] { run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q4_K }); });
+    suite.device_case("decode_routed_moe.q6_k", [] { run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }); });
     suite.device_case("decode_routed_moe.final_q6_duplicate_route", [] {
-        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, false, true);
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, false, true, false, false, true);
     });
     suite.device_case("decode_routed_moe.final_q6_observable_residual_alias", [] {
-        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, true, false, true);
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, false, true, false, true, false, true);
     });
     suite.device_case("decode_routed_moe.final_q6", [] {
-        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true);
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, false, true);
     });
     suite.device_case("decode_routed_moe.final_q6_observable_down", [] {
-        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, true);
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, false, true, true);
     });
     suite.device_case("decode_routed_moe.final_q6_observable_residual_input", [] {
-        run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, false, true, false, true);
+        run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, false, true, false, true);
     });
     suite.device_case("decode_routed_moe.q6_k.alias_gate_input",
-                      [] { run_decode_routed_moe_scheduling_case(GGML_TYPE_Q6_K, true); });
+                      [] { run_decode_routed_moe_scheduling_case({ GGML_TYPE_Q6_K }, true); });
     suite.device_case("rmsnorm_mul.hidden256.tokens1", [] { run_rmsnorm_mul_case(256, 1); });
     suite.device_case("rmsnorm_mul.hidden256.tokens4", [] { run_rmsnorm_mul_case(256, 4); });
     suite.device_case("rmsnorm_mul.hidden2048.tokens1", [] { run_rmsnorm_mul_case(2048, 1); });
