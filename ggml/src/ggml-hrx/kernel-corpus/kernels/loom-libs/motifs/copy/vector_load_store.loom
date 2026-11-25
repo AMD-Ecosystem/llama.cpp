@@ -1,6 +1,8 @@
 // Copyright 2026 The HRX Authors
 // SPDX-License-Identifier: Apache-2.0
 
+config.def @ggml.copy_f32.output_is_i32 = 0 : %value: index where [range(%value, 0, 1)]
+
 template.decl @ggml.copy.vector_load_store.f32_body(%element_count: index, %source: buffer, %output: buffer)
 
 template.def<@ggml.copy.vector_load_store.f32_body> device @ggml_copy_vector_load_store_f32_body(%element_count: index, %source: buffer, %output: buffer) {
@@ -15,10 +17,19 @@ template.def<@ggml.copy.vector_load_store.f32_body> device @ggml_copy_vector_loa
   %zero_offset = index.constant 0 : offset
   %source_noalias, %output_noalias = buffer.assume.noalias %source, %output : buffer, buffer
   %source_view = buffer.view %source_noalias[%zero_offset] : buffer -> view<[%count]xf32>
-  %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+  %mode = config.get @ggml.copy_f32.output_is_i32 : index
+  %one = index.constant 1 : index
+  %output_is_i32 = index.cmp eq, %mode, %one : index
   scf.if %in_bounds {
     %value = view.load %source_view[%linear] : view<[%count]xf32> -> f32
-    view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+    scf.if %output_is_i32 {
+      %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xi32>
+      %converted = scalar.fptosi %value : f32 to i32
+      view.store %converted, %output_view[%linear] : i32, view<[%count]xi32>
+    } else {
+      %output_view = buffer.view %output_noalias[%zero_offset] : buffer -> view<[%count]xf32>
+      view.store %value, %output_view[%linear] : f32, view<[%count]xf32>
+    }
   }
   template.return
 }

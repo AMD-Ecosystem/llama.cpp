@@ -2661,45 +2661,58 @@ static void run_copy_f32_i32_cpu_reference_case(int64_t count, bool scale) {
     REQUIRE(cpu_ctx != nullptr && hrx_ctx != nullptr);
     ggml_tensor * cpu_input = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, count + 2);
     ggml_tensor * hrx_input = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, count + 2);
-    ggml_tensor * cpu_target = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, count + 4);
-    ggml_tensor * hrx_target = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, count + 4);
-    auto build = [count, scale](ggml_context * ctx, ggml_tensor * input, ggml_tensor * target) {
+    ggml_tensor * cpu_copy_target = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_F32, count + 4);
+    ggml_tensor * hrx_copy_target = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_F32, count + 4);
+    ggml_tensor * cpu_cast_target = ggml_new_tensor_1d(cpu_ctx, GGML_TYPE_I32, count + 4);
+    ggml_tensor * hrx_cast_target = ggml_new_tensor_1d(hrx_ctx, GGML_TYPE_I32, count + 4);
+    auto build = [count, scale](ggml_context * ctx, ggml_tensor * input, ggml_tensor * copy_target,
+                               ggml_tensor * cast_target) {
         ggml_tensor * source = ggml_view_1d(ctx, input, count, sizeof(float));
         if (scale) {
             source = ggml_scale_bias(ctx, source, -1.0f, 3.0f);
         }
-        return ggml_cpy(ctx, source, ggml_view_1d(ctx, target, count, 2 * sizeof(int32_t)));
+        // Use both specializations at the same element count in one kernel cache.
+        ggml_tensor * copy = ggml_cpy(ctx, source, ggml_view_1d(ctx, copy_target, count, 2 * sizeof(float)));
+        ggml_tensor * cast = ggml_cpy(ctx, source, ggml_view_1d(ctx, cast_target, count, 2 * sizeof(int32_t)));
+        ggml_set_output(copy);
+        ggml_set_output(cast);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, copy);
+        ggml_build_forward_expand(graph, cast);
+        return graph;
     };
-    ggml_tensor * cpu_output = build(cpu_ctx, cpu_input, cpu_target);
-    ggml_tensor * hrx_output = build(hrx_ctx, hrx_input, hrx_target);
-    ggml_set_output(hrx_output);
-    ggml_cgraph * cpu_graph = ggml_new_graph(cpu_ctx);
-    ggml_cgraph * hrx_graph = ggml_new_graph(hrx_ctx);
-    ggml_build_forward_expand(cpu_graph, cpu_output);
-    ggml_build_forward_expand(hrx_graph, hrx_output);
+    ggml_cgraph * cpu_graph = build(cpu_ctx, cpu_input, cpu_copy_target, cpu_cast_target);
+    ggml_cgraph * hrx_graph = build(hrx_ctx, hrx_input, hrx_copy_target, hrx_cast_target);
     const auto kernels = scheduled_kernel_sequence(hrx_graph);
-    REQUIRE(kernels.size() == (scale ? 2 : 1));
-    REQUIRE(kernels.back() == "loom_libs:ggml_copy_f32_i32");
+    REQUIRE(kernels.size() == (scale ? 3 : 2));
+    REQUIRE(std::count(kernels.begin(), kernels.end(), "loom_libs:ggml_copy_f32") == 2);
     ggml_backend_buffer_t cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, cpu_backend);
     ggml_backend_buffer_t hrx_buffer = ggml_backend_alloc_ctx_tensors(hrx_ctx, hrx_backend);
     REQUIRE(cpu_buffer != nullptr && hrx_buffer != nullptr);
+    const std::vector<float> copy_sentinel(count + 4, -123.5f);
+    const std::vector<int32_t> cast_sentinel(count + 4, -1234567);
     for (int trial = 0; trial < 2; ++trial) {
         std::vector<float> values(count + 2);
         for (int64_t i = 0; i < count + 2; ++i) {
             values[i] = static_cast<float>((i + trial * 3) % 19 - 9) * 0.75f;
         }
-        const std::vector<int32_t> sentinel(count + 4, -1234567);
         set_tensor_pair_bytes(cpu_backend, cpu_input, hrx_backend, hrx_input, values.data(), values.size() * sizeof(float));
-        set_tensor_pair_bytes(cpu_backend, cpu_target, hrx_backend, hrx_target, sentinel.data(), sentinel.size() * sizeof(int32_t));
+        set_tensor_pair_bytes(cpu_backend, cpu_copy_target, hrx_backend, hrx_copy_target,
+                              copy_sentinel.data(), copy_sentinel.size() * sizeof(float));
+        set_tensor_pair_bytes(cpu_backend, cpu_cast_target, hrx_backend, hrx_cast_target,
+                              cast_sentinel.data(), cast_sentinel.size() * sizeof(int32_t));
         REQUIRE(ggml_backend_graph_compute(cpu_backend, cpu_graph) == GGML_STATUS_SUCCESS);
         REQUIRE(ggml_backend_graph_compute(hrx_backend, hrx_graph) == GGML_STATUS_SUCCESS);
         ggml_backend_synchronize(cpu_backend);
         ggml_backend_synchronize(hrx_backend);
+        const auto copy_actual = get_f32_tensor(hrx_backend, hrx_copy_target);
+        REQUIRE(copy_actual == get_f32_tensor(cpu_backend, cpu_copy_target));
+        REQUIRE(copy_actual.front() == copy_sentinel.front() && copy_actual.back() == copy_sentinel.back());
         std::vector<int32_t> expected(count + 4), actual(count + 4);
-        ggml_backend_tensor_get(cpu_target, expected.data(), 0, expected.size() * sizeof(int32_t));
-        ggml_backend_tensor_get(hrx_target, actual.data(), 0, actual.size() * sizeof(int32_t));
+        ggml_backend_tensor_get(cpu_cast_target, expected.data(), 0, expected.size() * sizeof(int32_t));
+        ggml_backend_tensor_get(hrx_cast_target, actual.data(), 0, actual.size() * sizeof(int32_t));
         REQUIRE(actual == expected);
-        REQUIRE(actual.front() == sentinel.front() && actual.back() == sentinel.back());
+        REQUIRE(actual.front() == cast_sentinel.front() && actual.back() == cast_sentinel.back());
     }
     ggml_backend_buffer_free(cpu_buffer);
     ggml_backend_buffer_free(hrx_buffer);

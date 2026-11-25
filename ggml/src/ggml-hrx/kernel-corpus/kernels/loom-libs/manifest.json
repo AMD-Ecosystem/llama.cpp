@@ -48,9 +48,6 @@
       "path": "ops/copy/copy_f32_f16.loom"
     },
     {
-      "path": "ops/copy/copy_f32_i32.loom"
-    },
-    {
       "path": "ops/copy/copy_f16_k16_major.loom"
     },
     {
@@ -526,9 +523,6 @@
     },
     {
       "path": "motifs/copy/convert_f32_f16.loom"
-    },
-    {
-      "path": "motifs/copy/convert_f32_i32.loom"
     },
     {
       "path": "motifs/copy/layout_k16_major.loom"
@@ -1191,45 +1185,6 @@
       },
       "compile_dependencies": [
         "motifs/copy/convert_f32_f16.loom"
-      ]
-    },
-    {
-      "name": "ggml_copy_f32_i32",
-      "family": "loom_libs",
-      "symbol": "ggml_copy_f32_i32",
-      "source": "ops/copy/copy_f32_i32.loom",
-      "workload_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ],
-      "launch_parameters": [
-        {
-          "name": "element_count",
-          "type": "index"
-        }
-      ],
-      "bindings": [
-        "source",
-        "output"
-      ],
-      "binding_access": [
-        "read",
-        "write"
-      ],
-      "target_selector": "",
-      "compile_recipe": {
-        "mode": "direct",
-        "primary_sources": [
-          "ops/copy/copy_f32_i32.loom"
-        ],
-        "library_sources": [
-          "motifs/copy/convert_f32_i32.loom"
-        ]
-      },
-      "compile_dependencies": [
-        "motifs/copy/convert_f32_i32.loom"
       ]
     },
     {
