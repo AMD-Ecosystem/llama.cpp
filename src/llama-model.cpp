@@ -3362,8 +3362,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             if (filter_idx) {
                                 filter_idx = [&](uint32_t il) { return il >= hparams.n_layer(); };
                             }
-                            // a dense MTP block (compress ratio 0, e.g. the shared MTP files) has no indexer to cache
-                            if (filter_idx && hparams.dsv4_compress_ratios[hparams.n_layer()] == 0) {
+                            // a dense MTP block (compress ratio 0, e.g. the shared MTP files) caches the indexer keys only
+                            // when its context may run QSA (mtp_qsa auto or on)
+                            if (filter_idx && hparams.dsv4_compress_ratios[hparams.n_layer()] == 0 && cparams.mtp_qsa == LLAMA_MTP_QSA_OFF) {
                                 filter_idx = nullptr;
                             }
                         }

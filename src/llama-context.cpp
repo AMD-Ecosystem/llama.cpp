@@ -216,6 +216,7 @@ llama_context::llama_context(
     embd_layer_inp.resize(hparams.n_layer() + 1);
 
     cparams.ctx_type          = params.ctx_type;
+    cparams.mtp_qsa           = params.mtp_qsa;
     cparams.rope_scaling_type = params.rope_scaling_type;
     cparams.pooling_type      = params.pooling_type;
 
@@ -543,6 +544,11 @@ llama_context::llama_context(
                     ggml_backend_buffer_name    (buf_output.get()),
                     ggml_backend_buffer_get_size(buf_output.get()) / 1024.0 / 1024.0);
         }
+    }
+
+    // a dense qwen4exp MTP block that the cache can never take to the QSA length stays dense and keeps no indexer state
+    if (cparams.mtp_qsa == LLAMA_MTP_QSA_AUTO && cparams.n_ctx_seq < LLAMA_MTP_QSA_MIN_KV) {
+        cparams.mtp_qsa = LLAMA_MTP_QSA_OFF;
     }
 
     // init the memory module
@@ -4445,6 +4451,7 @@ llama_context_params llama_context_default_params() {
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
         /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.mtp_qsa                     =*/ LLAMA_MTP_QSA_AUTO,
         /*.rope_freq_base              =*/ 0.0f,
         /*.rope_freq_scale             =*/ 0.0f,
         /*.yarn_ext_factor             =*/ -1.0f,

@@ -744,10 +744,15 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
         ggml_tensor * sel_mask, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
         const llama_ubatch * ubatch, ggml_tensor * new_pool_pos) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
-    GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_host(pool_idxs->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_host(pool_mask->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_host(tail_idxs->buffer));
+
+    // a graph that only keeps the pooled keys up to date (a dense step of a block that may switch to QSA) has no pool inputs
+    const bool select = pool_cells != nullptr;
+    if (select) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
+        GGML_ASSERT(ggml_backend_buffer_is_host(pool_idxs->buffer));
+        GGML_ASSERT(ggml_backend_buffer_is_host(pool_mask->buffer));
+        GGML_ASSERT(ggml_backend_buffer_is_host(tail_idxs->buffer));
+    }
 
     const uint32_t kpool = mem->get_kpool();
     const uint32_t n_kv  = get_idx()->get_n_kv();
@@ -756,7 +761,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
     const auto & lay = mem->kpool_layout_get();
 
     const uint32_t n_tokens = ubatch->n_tokens;
-    const uint32_t n_pool   = (uint32_t) pool_cells->ne[0];
+    const uint32_t n_pool   = select ? (uint32_t) pool_cells->ne[0] : kpool_pad(st.n_pool_real);
     const uint32_t n_new    = st.n_new;
     // the graph always pools at least one entry, padded to a stable bound, see kpool_build_state
     const uint32_t n_new_g  = st.n_new_g;
@@ -765,9 +770,11 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
     GGML_ASSERT(n_pool == kpool_pad(st.n_pool_real));
     GGML_ASSERT(st.is_new.size() == st.n_pool_real);
-    GGML_ASSERT(pool_mask->ne[0] == (int64_t) n_pool && pool_mask->ne[1] == (int64_t) n_tokens);
-    GGML_ASSERT(tail_idxs->ne[0] == (int64_t) kpool - 1 && tail_idxs->ne[1] == (int64_t) n_tokens);
-    GGML_ASSERT(pool_idxs->ne[0] == (int64_t) kpool && pool_idxs->ne[1] == (int64_t) n_pool);
+    if (select) {
+        GGML_ASSERT(pool_mask->ne[0] == (int64_t) n_pool && pool_mask->ne[1] == (int64_t) n_tokens);
+        GGML_ASSERT(tail_idxs->ne[0] == (int64_t) kpool - 1 && tail_idxs->ne[1] == (int64_t) n_tokens);
+        GGML_ASSERT(pool_idxs->ne[0] == (int64_t) kpool && pool_idxs->ne[1] == (int64_t) n_pool);
+    }
     GGML_ASSERT(ggml_backend_buffer_is_host(new_pool_idxs->buffer));
     GGML_ASSERT(ggml_nelements(new_pool_idxs) == (int64_t) kpool*n_new_g);
     // the graph always scatters the fresh pooled keys back into the cache, see build_qsa_sel
@@ -805,7 +812,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
     // in order mode a token sees the pools and the tail up to its own rank in the sequence, which its cell pins down
     std::vector<int64_t> rank;
-    if (by_order) {
+    if (by_order && select) {
         const auto &   sinfo = sinfos_kpool[i_cur];
         const uint32_t n_tps = (uint32_t) sinfo.size();
 
@@ -838,8 +845,16 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
     std::vector<llama_pos> pool_end;
     pool_end.reserve(n_pool);
 
-    int32_t * pcell = (int32_t *) pool_cells->data;
-    int32_t * pidx  = (int32_t *) pool_idxs->data;
+    // the pool cells and members are also what the padded entries below are placed around: keep them locally without the inputs
+    std::vector<int32_t> pcell_loc;
+    std::vector<int32_t> pidx_loc;
+    if (!select) {
+        pcell_loc.resize(n_pool);
+        pidx_loc.resize((size_t) n_pool*kpool);
+    }
+
+    int32_t * pcell = select ? (int32_t *) pool_cells->data : pcell_loc.data();
+    int32_t * pidx  = select ? (int32_t *) pool_idxs->data  : pidx_loc.data();
     int32_t * nidx  = (int32_t *) new_pool_idxs->data;
     int64_t * nrep  = (int64_t *) new_pool_rep->data;
     int32_t * npos  = new_pool_pos != nullptr ? (int32_t *) new_pool_pos->data : nullptr;
@@ -946,6 +961,10 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
             }
         }
     };
+    if (!select) {
+        return;
+    }
+
     if (pool_mask->type == GGML_TYPE_F16) {
         fill_mask((ggml_fp16_t *) pool_mask->data);
     } else {

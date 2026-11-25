@@ -6,6 +6,11 @@
 #include <algorithm>
 #include <cinttypes>
 
+// QSA or dense attention for the MTP block of a dense file, for a cache of n_kv cells
+static bool qwen4exp_mtp_use_qsa(llama_mtp_qsa_type mode, uint32_t n_kv) {
+    return mode == LLAMA_MTP_QSA_ON || (mode == LLAMA_MTP_QSA_AUTO && n_kv >= LLAMA_MTP_QSA_MIN_KV);
+}
+
 // bad metadata must be catchable: GGML_ASSERT aborts the whole process
 static void qwen4exp_require_nonzero(const llama_model_loader & ml, llm_kv kid, uint32_t value) {
     if (value == 0) {
@@ -623,13 +628,17 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
     // the draft memory has no recurrent layer, but its input still has to be allocated
     ggml_build_forward_expand(gf, inp_hyb->get_recr()->s_copy);
 
-    // a draft head whose compress ratio is 0 attends densely (e.g. the shared MTP files): no k-pool inputs, or
-    // their indexer key indexes stay unallocated while set_input() fills them
+    // a block with a compress ratio of 0 attends densely (the shared MTP files): it keeps the indexer state (keys and pooled
+    // keys) only when the draft context may switch to QSA (mtp_qsa auto or on), otherwise there is no indexer cache and no
+    // k-pool input, or their indexer key indexes would stay unallocated while set_input() fills them
     llm_graph_input_kpool * inp_kpool = nullptr;
-    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0 && hparams.dsv4_compress_ratios[il] > 0) {
+    if (mctx_hyb->get_idx() && hparams.indexer_kpool > 0 && (hparams.dsv4_compress_ratios[il] > 0 || cparams.mtp_qsa != LLAMA_MTP_QSA_OFF)) {
         GGML_ASSERT(mctx_hyb->get_idx()->get_n_kv() == mctx_hyb->get_attn()->get_n_kv() &&
                 "the indexer cache must track the attention cache cell for cell");
-        inp_kpool = build_inp_kpool(mctx_hyb);
+        // a dense block picks QSA or dense attention for the cache length of this graph: the k-pool input of a dense step is
+        // the light one
+        const bool select = hparams.dsv4_compress_ratios[il] > 0 || qwen4exp_mtp_use_qsa(cparams.mtp_qsa, mctx_hyb->get_idx()->get_n_kv());
+        inp_kpool = build_inp_kpool(mctx_hyb, select);
     }
 
     ggml_tensor * inp_pos     = build_inp_pos();
@@ -671,6 +680,7 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
 
     const llama_model & model_head = model.output || !model_tgt ? model : *model_tgt;
     GGML_ASSERT(model_head.output && "qwen4exp MTP has no output head, neither its own nor its target's");
+
     cur = build_lora_mm(model_head.output, cur, model_head.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -744,9 +754,11 @@ public:
         bool res = true;
 
         res &= k_idxs->ne[0]     == params.ubatch.n_tokens;
-        res &= pool_cells->ne[0] == mctx->get_n_kpool();
-        res &= pool_mask->ne[1]  == params.ubatch.n_tokens;
-        res &= tail_idxs->ne[1]  == params.ubatch.n_tokens;
+        if (select) {
+            res &= pool_cells->ne[0] == mctx->get_n_kpool();
+            res &= pool_mask->ne[1]  == params.ubatch.n_tokens;
+            res &= tail_idxs->ne[1]  == params.ubatch.n_tokens;
+        }
         // the scatter mask shape follows n_kv
         res &= n_kv              == idx->get_n_kv();
         res &= n_new             == mctx->get_n_kpool_new();
@@ -755,6 +767,7 @@ public:
     }
 
     ggml_tensor * k_idxs        = nullptr; // I64 [n_tokens]
+    // null for a dense step that only keeps the pooled keys up to date (select == false): nothing reads them
     ggml_tensor * pool_cells    = nullptr; // I32 [n_pool]         cell caching each block's pooled key
     ggml_tensor * pool_idxs     = nullptr; // I32 [kpool, n_pool]  member cells per block, n_kv sentinel for the padded blocks
     ggml_tensor * pool_mask     = nullptr; // F16 [n_pool, n_tokens]
@@ -766,12 +779,13 @@ public:
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t kpool;
+    bool     select = true; // the layers attend through QSA, else the step only keeps the pooled keys up to date
     uint32_t n_new = 0; // padded to a stable bound, never below 1
     uint32_t n_sel = 0;
     uint32_t n_kv  = 0;
 };
 
-llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb) {
+llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb, bool select) {
     const auto * mctx_idx = mctx_hyb->get_idx();
     GGML_ASSERT(mctx_idx != nullptr);
 
@@ -780,21 +794,24 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_hyb, kpool);
 
+    inp->select     = select;
     inp->k_idxs     = mctx_idx->build_input_k_idxs(ctx0, ubatch);
-    inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
-    inp->pool_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
-    inp->pool_mask  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
-    inp->tail_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool - 1, n_tokens);
-    ggml_set_input(inp->pool_cells);
-    ggml_set_input(inp->pool_idxs);
-    ggml_set_input(inp->pool_mask);
-    ggml_set_input(inp->tail_idxs);
+    if (select) {
+        inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
+        inp->pool_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
+        inp->pool_mask  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
+        inp->tail_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool - 1, n_tokens);
+        ggml_set_input(inp->pool_cells);
+        ggml_set_input(inp->pool_idxs);
+        ggml_set_input(inp->pool_mask);
+        ggml_set_input(inp->tail_idxs);
 
-    // set_input fills them all, so keep them allocated even when no op reads them
-    ggml_build_forward_expand(gf, inp->pool_cells);
-    ggml_build_forward_expand(gf, inp->pool_idxs);
-    ggml_build_forward_expand(gf, inp->pool_mask);
-    ggml_build_forward_expand(gf, inp->tail_idxs);
+        // set_input fills them all, so keep them allocated even when no op reads them
+        ggml_build_forward_expand(gf, inp->pool_cells);
+        ggml_build_forward_expand(gf, inp->pool_idxs);
+        ggml_build_forward_expand(gf, inp->pool_mask);
+        ggml_build_forward_expand(gf, inp->tail_idxs);
+    }
 
     inp->n_kv  = mctx_idx->get_n_kv();
     inp->n_new = mctx_hyb->get_n_kpool_new();
@@ -827,10 +844,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     const int64_t idx_dim = hparams.indexer_head_size;
     const int64_t n_idx_h = hparams.indexer_n_head;
     const int64_t kpool   = inp_kpool->kpool;
-    const int64_t n_pool  = inp_kpool->pool_cells->ne[0];
+    const int64_t n_pool  = inp_kpool->select ? inp_kpool->pool_cells->ne[0] : 0; // the light input has no pool tensors
     const int64_t n_new   = inp_kpool->n_new;
 
-    GGML_ASSERT(hparams.dsv4_compress_ratios[il] == kpool);
+    GGML_ASSERT(kpool == hparams.indexer_kpool);
 
     // cache rows store raw key | pooled key: pooling precedes norm and rotation, so the raw key gets neither
     ggml_tensor * k_raw = build_lora_mm(model.layers[il].index_k_proj, cur);
@@ -864,6 +881,13 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     // scatter the fresh pooled keys into their rep rows, then gather all n_pool of them by cell:
     // the older pools come from the rows earlier ubatches wrote
     ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
+
+    // a dense step of a block that may switch to QSA only keeps the state up to date: every ubatch writes its keys and
+    // re-pools the blocks it completes, so that a later QSA step finds the pooled keys of the whole context
+    if (!inp_kpool->select) {
+        return nullptr;
+    }
+
     ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
     pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_pool);
     cb(pooled, "indexer_k", il);
@@ -1025,9 +1049,19 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
-    const bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+    bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    ggml_tensor * sel = qsa ? build_qsa_sel(mctx_hyb, inp_kpool, cur, inp_pos, il) : nullptr;
+    // the MTP block of a dense file keeps the indexer state (see graph_mtp), QSA or dense attention is picked per graph
+    const bool dense_mtp_state = inp_kpool != nullptr && !qsa && cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && il >= (int) hparams.n_layer();
+    if (dense_mtp_state) {
+        qsa = inp_kpool->select;
+    }
+
+    // a dense step builds no selection, it only keeps the indexer keys and the pooled keys up to date
+    ggml_tensor * sel = nullptr;
+    if (qsa || dense_mtp_state) {
+        sel = build_qsa_sel(mctx_hyb, inp_kpool, cur, inp_pos, il);
+    }
 
     // Qwen3Next uses a single Q projection that outputs query + gate
     ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]

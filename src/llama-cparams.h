@@ -7,6 +7,10 @@
 
 #define LLAMA_MAX_SEQ 256
 
+// qwen4exp: an MTP block that the GGUF stores with dense attention (the shared MTP files) attends densely while the cache holds
+// fewer cells than this, and through QSA from there on (--spec-draft-qsa auto)
+static constexpr uint32_t LLAMA_MTP_QSA_MIN_KV = 40960;
+
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
     uint32_t n_ctx_seq;       // context for a single sequence
@@ -63,6 +67,7 @@ struct llama_cparams {
     bool embeddings_nextn_dev;     // write the unmasked h_nextn rows to a device buffer instead of host, see llama_set_embeddings_nextn_dev()
 
     enum llama_context_type ctx_type;
+    enum llama_mtp_qsa_type mtp_qsa;
     enum llama_rope_scaling_type rope_scaling_type;
     enum llama_pooling_type pooling_type;
 

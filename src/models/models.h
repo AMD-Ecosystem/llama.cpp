@@ -2741,9 +2741,11 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int   il);
 
         // the QSA layers share one set of k-pool inputs, see llama_memory_hybrid_idx
-        llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
+        // select = false is the light set of a dense step that only keeps the pooled keys up to date: no pool inputs
+        llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb, bool select = true);
 
         // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail
+        // a light k-pool input (inp_kpool->select == false) only writes the indexer keys and the pooled keys of the new blocks, and returns null
         ggml_tensor * build_qsa_sel(
   const llama_memory_hybrid_idx_context * mctx_hyb,
           llm_graph_input_kpool * inp_kpool,
