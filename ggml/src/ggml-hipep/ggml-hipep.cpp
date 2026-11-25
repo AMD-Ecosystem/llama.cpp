@@ -1,20 +1,19 @@
 // HIPEP: a device per ROCm device (HIPEP0 over ROCm0) whose splits are compiled
 // and run by libhipep_backend (hipep_backend.h, hip-ep):
 //
-//   llama-cli -m M.gguf --device HIPEP0,ROCm0 -ts 1,0 -ngl 99
+//   llama-cli -m M.gguf --device HIPEP0 -ngl 99
 //
-// the layers given to it (-ts) are its: llama.cpp puts their weights and cache
-// in its buffers - ROCm0's memory, allocated by ggml-hip's buffer code under a
-// buffer type of its own - and their norms on it, so they are in its splits.
-// listed after ROCm0 (--device ROCm0,HIPEP0 -ts 3,1) it runs the last layers
-// and ggml-hip the others; listed first with no layers (-ts 0,1) it takes,
-// from ROCm0's layers, what it compiles. it takes what the library compiles
-// and ggml-hip runs too; each split the scheduler hands it runs by compiled
-// code - or, until that is ready or when it cannot be, by a ggml-hip backend
-// of its own on the same device.
+// the layers given to it are its: llama.cpp puts their weights and cache in
+// its buffers - ROCm0's memory, allocated by ggml-hip's buffer code under a
+// buffer type of its own - and it takes every operation of them ggml-hip
+// runs. each split the scheduler hands it is cut into runs: what the library
+// compiles runs by compiled code, the rest - and a run whose code is not ready
+// or cannot be had - by a ggml-hip backend of its own on the same device.
+// listed with ROCm0 it shares the layers as -ts says (--device ROCm0,HIPEP0
+// -ts 3,1: ggml-hip the first three quarters, it the last).
 //
 // environment: HIPEP_BACKEND_WAIT=1 compiles on the calling thread (a split
-// waits for its code); HIPEP_BACKEND_LOG=1 says what each split ran by;
+// waits for its code); HIPEP_BACKEND_LOG=1 says what each run ran by;
 // HIPEP_BACKEND_PROFILE=1 says where the time went when the backend goes.
 // the library's own: HIPEP_BACKEND_CACHE, HIPEP_BACKEND_OPS,
 // HIPEP_BACKEND_COMPILE=0 (code from the cache only).
@@ -42,6 +41,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 static bool hipep_env(const char * name) {
@@ -77,19 +77,29 @@ struct hipep_device_context {
     }
 };
 
-// what a split llama.cpp hands again is: the same tensors where they were,
-// collected as before
+// a run of a split's nodes, the graph's nodes [begin, end): what the library
+// compiles, or what it does not, which its ggml-hip runs
+struct hipep_segment {
+    int                  begin    = 0;
+    int                  end      = 0;
+    bool                 compiled = false;
+    // compiled: its nodes and what it hands on, the tensors it reads, its code
+    hipep_split_nodes    split;
+    hipep_split_tensors  tensors;
+    std::vector<void *>  data;
+    hipep_backend_code * code   = nullptr;
+    // compiling asked for, or the code cannot be had or failed: the library is
+    // not asked again, and ggml-hip runs the run
+    bool                 asked  = false;
+    bool                 failed = false;
+    std::string          ops;
+};
+
+// what a split llama.cpp hands again is: the same tensors where they were, cut
+// as before
 struct hipep_memo {
-    std::vector<uintptr_t> fingerprint;
-    hipep_split_nodes      split;
-    hipep_split_tensors    tensors;
-    std::vector<void *>    data;
-    hipep_backend_code *   code       = nullptr;
-    bool                   computable = true;
-    // compiling asked for, or the code failed: the library is not asked again
-    bool                   asked  = false;
-    bool                   failed = false;
-    std::string            ops;
+    std::vector<uintptr_t>     fingerprint;
+    std::vector<hipep_segment> segments;
 };
 
 struct hipep_profile {
@@ -205,6 +215,107 @@ static std::string hipep_ops_of(const hipep_split_nodes & split) {
     return text;
 }
 
+static hipep_segment hipep_segment_of(int begin, int end, bool compiled) {
+    hipep_segment segment;
+    segment.begin    = begin;
+    segment.end      = end;
+    segment.compiled = compiled;
+    return segment;
+}
+
+// nodes [begin, end) of `graph`, as a graph of their own (ggml_graph_view, which
+// ggml-base does not export)
+static ggml_cgraph hipep_graph_view(ggml_cgraph * graph, int begin, int end) {
+    ggml_cgraph view = *graph;
+    view.size        = 0;
+    view.n_nodes     = end - begin;
+    view.n_leafs     = 0;
+    view.nodes       = graph->nodes + begin;
+    view.grads       = nullptr;
+    view.grad_accs   = nullptr;
+    view.leafs       = nullptr;
+    view.uid         = 0;
+    view.from_sched  = false;
+    return view;
+}
+
+static bool hipep_is_view(const ggml_tensor * node) {
+    return node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE ||
+           node->op == GGML_OP_TRANSPOSE;
+}
+
+// the split cut into runs of what the library compiles and what it does not
+// (it takes every operation of its layers ggml-hip runs). a view goes with the
+// run it is in. a compiled run hands on what the split does and what a later
+// run reads
+static std::vector<hipep_segment> hipep_segments_of(hipep_backend_ctx * sdk, const ggml_cgraph & graph) {
+    std::vector<hipep_segment> segments;
+    const hipep_split_nodes    whole = hipep_split_nodes_of(graph);
+    if (sdk == nullptr || !whole.computable || whole.nodes.empty()) {
+        segments.push_back(hipep_segment_of(0, graph.n_nodes, false));
+        segments.back().failed = !whole.nodes.empty();
+        return segments;
+    }
+    std::unordered_map<const ggml_tensor *, bool> exported;
+    for (size_t i = 0; i < whole.nodes.size(); ++i) {
+        exported.emplace(whole.nodes[i], whole.exported[i]);
+    }
+    // per node: compiled (1) or not (0); a view, or a node nothing computes
+    // (-1), goes with the run it is in, the first ones with the first run
+    std::vector<int> kinds(graph.n_nodes, -1);
+    for (int i = 0; i < graph.n_nodes; ++i) {
+        const ggml_tensor * node = graph.nodes[i];
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0 && !hipep_is_view(node)) {
+            hipep_split_tensors op;
+            hipep_collect_op(node, op);
+            const hipep_backend_split_desc desc = op.desc();
+            kinds[i]                            = hipep_backend_supports(sdk, &desc) != 0 ? 1 : 0;
+        }
+    }
+    auto first = std::find_if(kinds.begin(), kinds.end(), [](int kind) { return kind != -1; });
+    int  kind  = first == kinds.end() ? 0 : *first;
+    for (int i = 0; i < graph.n_nodes; ++i) {
+        kind = kinds[i] == -1 ? kind : kinds[i];
+        if (segments.empty() || segments.back().compiled != (kind == 1)) {
+            segments.push_back(hipep_segment_of(i, i + 1, kind == 1));
+        }
+        segments.back().end = i + 1;
+    }
+    // what the runs after each one read
+    std::unordered_set<const ggml_tensor *> read_after;
+    for (size_t s = segments.size(); s-- > 0;) {
+        hipep_segment & segment = segments[s];
+        if (segment.compiled) {
+            for (int i = segment.begin; i < segment.end; ++i) {
+                const ggml_tensor * node  = graph.nodes[i];
+                auto                found = exported.find(node);
+                if (found == exported.end()) {
+                    continue;
+                }
+                segment.split.nodes.push_back(node);
+                segment.split.exported.push_back(found->second ||
+                                                 (!hipep_is_view(node) && read_after.count(node) != 0));
+            }
+            segment.failed = segment.split.nodes.empty() || !hipep_collect_split(segment.split, segment.tensors);
+            segment.data.resize(segment.tensors.tensors.size());
+            if (hipep_env("HIPEP_BACKEND_PROFILE") || hipep_env("HIPEP_BACKEND_LOG")) {
+                segment.ops = hipep_ops_of(segment.split);
+            }
+        }
+        for (int i = segment.begin; i < segment.end; ++i) {
+            for (const ggml_tensor * src : graph.nodes[i]->src) {
+                if (src != nullptr) {
+                    read_after.insert(src);
+                    if (src->view_src != nullptr) {
+                        read_after.insert(src->view_src);
+                    }
+                }
+            }
+        }
+    }
+    return segments;
+}
+
 // before the first step: the scheduler's splits of the graphs llama.cpp reserves (a prompt's worst-case ubatch, a
 // decode step) compiled now, while the context is made, and not at the first step that runs them
 // (HIPEP_BACKEND_PRECOMPILE=0: not). a graph only split - a probe of whether a fused op stays on the layer's
@@ -217,16 +328,52 @@ static void ggml_backend_hipep_graph_optimize(ggml_backend_t backend, ggml_cgrap
         (disabled != nullptr && std::strcmp(disabled, "0") == 0)) {
         return;
     }
-    const hipep_split_nodes split = hipep_split_nodes_of(*graph);
-    hipep_split_tensors     tensors;
-    hipep_backend_ctx *     sdk = ctx->device->open();
-    if (sdk == nullptr || !split.computable || split.nodes.empty() || !hipep_collect_split(split, tensors)) {
+    hipep_backend_ctx * sdk = ctx->device->open();
+    if (sdk == nullptr) {
         return;
     }
-    const hipep_backend_split_desc desc = tensors.desc();
-    if (hipep_backend_find(sdk, &desc) == nullptr) {
-        hipep_backend_compile(sdk, &desc, /*wait=*/true);
+    for (const hipep_segment & segment : hipep_segments_of(sdk, *graph)) {
+        if (!segment.compiled || segment.failed) {
+            continue;
+        }
+        const hipep_backend_split_desc desc = segment.tensors.desc();
+        if (hipep_backend_find(sdk, &desc) == nullptr) {
+            hipep_backend_compile(sdk, &desc, /*wait=*/true);
+        }
     }
+}
+
+// one compiled run, by its code: false when there is none (yet) or it failed
+static bool hipep_run_compiled(hipep_backend_context * ctx,
+                               hipep_backend_ctx *     sdk,
+                               hipep_segment &         segment,
+                               std::string &           why) {
+    if (segment.code == nullptr && !segment.failed) {
+        const hipep_backend_split_desc desc = segment.tensors.desc();
+        segment.code                        = hipep_backend_find(sdk, &desc);
+        if (segment.code == nullptr && !segment.asked) {
+            segment.code  = hipep_backend_compile(sdk, &desc, hipep_env("HIPEP_BACKEND_WAIT"));
+            segment.asked = true;
+        }
+        if (segment.code == nullptr) {
+            why = hipep_backend_last_error(sdk);
+        }
+    }
+    if (segment.code == nullptr) {
+        return false;
+    }
+    for (size_t i = 0; i < segment.data.size(); ++i) {
+        segment.data[i] = segment.tensors.originals[i]->data;
+    }
+    if (hipep_backend_run(segment.code, segment.data.data(), nullptr) != 0) {
+        // the code ran and failed: never again
+        why            = hipep_backend_last_error(sdk);
+        segment.code   = nullptr;
+        segment.failed = true;
+        GGML_LOG_ERROR("%s: split of %s: %s\n", ctx->device->name.c_str(), segment.ops.c_str(), why.c_str());
+        return false;
+    }
+    return true;
 }
 
 static ggml_status ggml_backend_hipep_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
@@ -234,87 +381,55 @@ static ggml_status ggml_backend_hipep_graph_compute(ggml_backend_t backend, ggml
     const auto since = [](clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); };
     auto *     ctx   = static_cast<hipep_backend_context *>(backend->context);
 
-    // its buffers are ROCm0's, so the scheduler copies nothing between it and
-    // ROCm0 - and so does not always wait for one before the other runs. both
-    // sides wait here: for ROCm0's work before the split, and for the split's
-    // before ROCm0 goes on
+    // the compiled code runs on the library's own stream, which the scheduler
+    // does not know of: both sides wait here - for the device's work before
+    // the split, and for the split's before anything else goes on
     clock::time_point start = clock::now();
     (void) hipDeviceSynchronize();
     ctx->wait_seconds += since(start);
 
     start                              = clock::now();
+    hipep_backend_ctx *    sdk         = ctx->device->open();
     std::vector<uintptr_t> fingerprint = hipep_fingerprint(*graph);
     hipep_memo &           memo        = ctx->memos[graph];
     if (memo.fingerprint != fingerprint) {
-        memo             = {};
         memo.fingerprint = std::move(fingerprint);
-        memo.split       = hipep_split_nodes_of(*graph);
-        memo.computable  = memo.split.computable && hipep_collect_split(memo.split, memo.tensors);
-        memo.data.resize(memo.tensors.tensors.size());
-        if (hipep_env("HIPEP_BACKEND_PROFILE") || hipep_env("HIPEP_BACKEND_LOG")) {
-            memo.ops = hipep_ops_of(memo.split);
-        }
+        memo.segments    = hipep_segments_of(sdk, *graph);
     }
-
-    hipep_backend_ctx * sdk = ctx->device->open();
-    bool                ran = false;
-    std::string         why;
-    if (memo.computable && !memo.split.nodes.empty() && sdk != nullptr) {
-        ++ctx->splits;
-        if (memo.code == nullptr && !memo.failed) {
-            const hipep_backend_split_desc desc = memo.tensors.desc();
-            memo.code                           = hipep_backend_find(sdk, &desc);
-            if (memo.code == nullptr && !memo.asked) {
-                memo.code  = hipep_backend_compile(sdk, &desc, hipep_env("HIPEP_BACKEND_WAIT"));
-                memo.asked = true;
-            }
-            if (memo.code == nullptr) {
-                why = hipep_backend_last_error(sdk);
-            }
-        }
-        ctx->collect_seconds += since(start);
-        start = clock::now();
-        if (memo.code != nullptr) {
-            for (size_t i = 0; i < memo.data.size(); ++i) {
-                memo.data[i] = memo.tensors.originals[i]->data;
-            }
-            ran = hipep_backend_run(memo.code, memo.data.data(), nullptr) == 0;
-            if (!ran) {
-                // the code ran and failed: never again
-                why         = hipep_backend_last_error(sdk);
-                memo.code   = nullptr;
-                memo.failed = true;
-                GGML_LOG_ERROR("%s: split of %s: %s\n", ctx->device->name.c_str(), memo.ops.c_str(), why.c_str());
-            }
-        }
-    } else if (!memo.split.nodes.empty()) {
-        ++ctx->splits;
-        ctx->collect_seconds += since(start);
-        start = clock::now();
-    } else {
-        // nothing to compute
+    ctx->collect_seconds += since(start);
+    if (graph->n_nodes == 0) {
         return GGML_STATUS_SUCCESS;
     }
+    ++ctx->splits;
 
     ggml_status status = GGML_STATUS_SUCCESS;
-    if (!ran) {
-        status = ggml_backend_graph_compute_async(ctx->rocm, graph);
-        ggml_backend_synchronize(ctx->rocm);
+    for (hipep_segment & segment : memo.segments) {
+        start = clock::now();
+        std::string why;
+        const bool  ran = segment.compiled && sdk != nullptr && hipep_run_compiled(ctx, sdk, segment, why);
+        if (!ran) {
+            ggml_cgraph run = hipep_graph_view(graph, segment.begin, segment.end);
+            status          = ggml_backend_graph_compute_async(ctx->rocm, &run);
+            ggml_backend_synchronize(ctx->rocm);
+            if (status != GGML_STATUS_SUCCESS) {
+                return status;
+            }
+        }
+        (void) hipDeviceSynchronize();
+        const double seconds = since(start);
+        ++(ran ? ctx->compiled : ctx->fallback);
+        (ran ? ctx->run_seconds : ctx->fallback_seconds) += seconds;
+        if (hipep_env("HIPEP_BACKEND_PROFILE")) {
+            hipep_profile & p = ctx->profile[std::string(ran ? "compiled " : "ggml-hip ") +
+                                             (segment.compiled ? segment.ops : std::string("(not compiled)"))];
+            ++p.runs;
+            p.seconds += seconds;
+        }
+        if (hipep_env("HIPEP_BACKEND_LOG")) {
+            fprintf(stderr, "%s: split (%d nodes): %s%s%s\n", ctx->device->name.c_str(), segment.end - segment.begin,
+                    ran ? "compiled" : "ggml-hip", why.empty() ? "" : ": ", why.c_str());
+        }
     }
-    (void) hipDeviceSynchronize();
-    const double seconds = since(start);
-    ++(ran ? ctx->compiled : ctx->fallback);
-    (ran ? ctx->run_seconds : ctx->fallback_seconds) += seconds;
-    if (hipep_env("HIPEP_BACKEND_PROFILE")) {
-        hipep_profile & p = ctx->profile[std::string(ran ? "compiled " : "ggml-hip ") + memo.ops];
-        ++p.runs;
-        p.seconds += seconds;
-    }
-    if (hipep_env("HIPEP_BACKEND_LOG")) {
-        fprintf(stderr, "%s: split (%d nodes): %s%s%s\n", ctx->device->name.c_str(), graph->n_nodes,
-                ran ? "compiled" : "ggml-hip", why.empty() ? "" : ": ", why.c_str());
-    }
-
     return status;
 }
 
@@ -391,27 +506,10 @@ static ggml_backend_buffer_type_t ggml_backend_hipep_device_get_buffer_type(ggml
     return &hipep_device_of(dev).buft;
 }
 
+// every operation ggml-hip runs: what the library does not compile of a split,
+// its own ggml-hip runs (hipep_segments_of), so its layers stay on the GPU
 static bool ggml_backend_hipep_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    hipep_device_context & device = hipep_device_of(dev);
-    if (!ggml_backend_dev_supports_op(device.rocm, op)) {
-        return false;
-    }
-    // an operation writing into its own buffers (a recurrent state's update in
-    // place) is its, compiled or not: no other device takes them. what it does
-    // not compile, its ggml-hip runs
-    const ggml_tensor * storage = op->view_src != nullptr ? op->view_src : op;
-    if (storage->buffer != nullptr && ggml_backend_buffer_get_type(storage->buffer) == &device.buft &&
-        ggml_backend_buffer_get_usage(storage->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
-        return true;
-    }
-    hipep_backend_ctx * sdk = device.open();
-    if (sdk == nullptr) {
-        return false;
-    }
-    hipep_split_tensors tensors;
-    hipep_collect_op(op, tensors);
-    const hipep_backend_split_desc desc = tensors.desc();
-    return hipep_backend_supports(sdk, &desc) != 0;
+    return ggml_backend_dev_supports_op(hipep_device_of(dev).rocm, op);
 }
 
 static const char * ggml_backend_hipep_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
@@ -419,10 +517,9 @@ static const char * ggml_backend_hipep_buffer_type_get_name(ggml_backend_buffer_
 }
 
 static bool ggml_backend_hipep_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    // its own buffers, and ROCm0's: it takes what it compiles of ROCm0's
-    // layers too, unless ROCm0 is listed first (it then keeps them)
-    hipep_device_context & device = hipep_device_of(dev);
-    return buft == &device.buft || buft == ggml_backend_dev_buffer_type(device.rocm);
+    // its own buffers alone: the layers given to it are what it runs, whatever
+    // the order the devices are listed in (it reads ROCm0's through a copy)
+    return buft == &hipep_device_of(dev).buft;
 }
 
 static const ggml_backend_device_i ggml_backend_hipep_device_interface = {
