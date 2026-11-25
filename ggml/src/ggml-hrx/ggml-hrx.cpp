@@ -1209,9 +1209,6 @@ static bool device_supports_op(ggml_backend_dev_t device, const ggml_tensor * op
     if (zero_output_elision_supported(op)) {
         return true;
     }
-    if (op->op == GGML_OP_CPY && op->src[0] != nullptr && op->src[0]->type != op->type) {
-        return ggml::hrx::can_execute_standalone_op_as_graph(op, device_context(device)->architecture);
-    }
     if (op->op == GGML_OP_DUP) {
         const ggml_tensor * source = op->src[0];
         if (source == nullptr) {

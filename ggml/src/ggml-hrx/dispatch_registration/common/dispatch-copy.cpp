@@ -13,6 +13,7 @@ namespace {
 
 static constexpr uint64_t         kMaximumCopyElements = uint64_t{ 1 } << 30;
 static constexpr KernelCatalogRef kCopyF32Kernel       = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32");
+static constexpr KernelCatalogRef kCopyF32I32Kernel = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32_i32");
 static constexpr KernelCatalogRef kCopyF32F16Kernel    = GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_f32_f16");
 static constexpr KernelCatalogRef kCopyStridedSourceF32Kernel =
     GGML_HRX_KERNEL_REF("loom_libs", "ggml_copy_strided_source_f32");
@@ -220,6 +221,37 @@ static bool match_copy_f32_f16_dispatch(const DispatchMatchContext & context, Di
     return true;
 }
 
+static bool match_copy_f32_i32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
+    const GraphNode * node = context.root_node;
+    if (node == nullptr || node->op != GGML_OP_CPY || node->inputs.size() != 2) {
+        return false;
+    }
+
+    const Value * source = graph_value(context.graph, node->inputs[0]);
+    const Value * target = graph_value(context.graph, node->inputs[1]);
+    const Value * output = graph_value(context.graph, node->output);
+    if (source == nullptr || target == nullptr || output == nullptr || source->type != GGML_TYPE_F32 ||
+        target->type != GGML_TYPE_I32 || output->type != GGML_TYPE_I32 || !source->contiguous ||
+        !target->contiguous || !output->contiguous || target->ne != output->ne ||
+        source->element_count <= 0 || source->element_count != output->element_count ||
+        static_cast<uint64_t>(source->element_count) > kMaximumCopyElements ||
+        source->byte_count != static_cast<size_t>(source->element_count) * sizeof(float) ||
+        output->byte_count != static_cast<size_t>(output->element_count) * sizeof(int32_t) ||
+        target->storage != output->storage || source->storage == output->storage) {
+        return false;
+    }
+
+    Dispatch dispatch;
+    dispatch.kernel = make_kernel_specialization(kCopyF32I32Kernel);
+    dispatch.kernel.workload_specialization = WorkloadSpecialization::Dynamic;
+    dispatch.kernel.integer_parameters.emplace("element_count", source->element_count);
+    dispatch.bindings.push_back({ source->storage_root, source->storage_offset, source->byte_count });
+    dispatch.bindings.push_back({ output->id, 0, output->byte_count });
+    match.covered_nodes.push_back(context.root_index);
+    match.dispatches.push_back(std::move(dispatch));
+    return true;
+}
+
 static bool match_cont_or_dup_f32_dispatch(const DispatchMatchContext & context, DispatchMatch & match) {
     const GraphNode * node = context.root_node;
     if (node == nullptr) {
@@ -366,6 +398,8 @@ static bool match_concat_packed(const DispatchMatchContext & context, DispatchMa
 void register_copy_dispatch(DispatchRegistryBuilder & registry) {
     registry.add({ "common.repeat_f32", GGML_OP_REPEAT, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
                    match_cont_bits_dispatch });
+    registry.add({ "common.copy_f32_i32", GGML_OP_CPY, DispatchMatchKind::SingleOp, 0, DispatchSource::Common,
+                   match_copy_f32_i32_dispatch });
     registry.add({
         "common.copy_f32_f16",
         GGML_OP_CPY,
