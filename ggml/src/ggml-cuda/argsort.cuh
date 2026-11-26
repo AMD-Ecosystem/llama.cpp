@@ -20,4 +20,5 @@ void argsort_f32_i32_cuda_bitonic(const float *   x,
                                   const int       ncols,
                                   const int       nrows,
                                   ggml_sort_order order,
-                                  cudaStream_t    stream);
+                                  cudaStream_t    stream,
+                                  int             ncols_out = -1);

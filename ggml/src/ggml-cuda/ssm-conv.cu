@@ -205,3 +205,119 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, g
                           out->nb[2], nc, nr, n_t, n_s, stream);
     }
 }
+
+// RMS_NORM + SCALE of the rows of 128 channels [c0[k], c1[k]) of the convolution step's result into dst[k]
+struct ssm_conv_step_norm {
+    float * dst[2];
+    int     c0[2];
+    int     c1[2];
+    float   eps[2];
+    float   scale[2];
+};
+
+// One token of a short convolution with its state: channel c convolves its d_conv - 1 state values, read in place in
+// the cache row rows[0] indexes, and x[c] with the weights as ssm_conv_f32 does (then SiLU), and writes the window's
+// last d_conv - 1 values back as the new state. Each thread reads and writes the state of its own channel only.
+// With has_norm, the blocks of 128 channels in a range of norm also normalize them as
+// rms_norm_f32<WARP_SIZE, 1, true, false, false, true> does a row.
+template <int d_conv, bool has_norm>
+static __global__ void ssm_conv_step_f32(const float * __restrict__ cache, const int32_t * __restrict__ rows,
+                                         const int64_t row_stride, const float * __restrict__ x,
+                                         const float * __restrict__ w, const float * __restrict__ bias,
+                                         float * __restrict__ state_out, float * __restrict__ dst, const int n_channels,
+                                         const ssm_conv_step_norm norm) {
+    const int c = blockIdx.x*blockDim.x + threadIdx.x;
+    if (c >= n_channels) {
+        return;
+    }
+    const float * state = cache + rows[0]*row_stride + (int64_t) c*(d_conv - 1);
+
+    float xw[d_conv];
+#pragma unroll
+    for (int j = 0; j < d_conv - 1; ++j) {
+        xw[j] = state[j];
+    }
+    xw[d_conv - 1] = x[c];
+
+    float wc[d_conv];
+#pragma unroll
+    for (int j = 0; j < d_conv; ++j) {
+        wc[j] = w[c*d_conv + j];
+    }
+    const float b = bias != nullptr ? bias[c] : 0.0f;
+
+    float sumf = 0.0f;
+#pragma unroll
+    for (int j = 0; j < d_conv; j++) {
+        sumf += xw[j] * wc[j];
+    }
+    sumf += b;
+    const float y = ggml_cuda_op_silu_single(sumf);
+    dst[c] = y;
+
+    if constexpr (has_norm) {
+        constexpr int ncols = 128;
+        const int c_block = blockIdx.x*blockDim.x;
+        int k = -1;
+#pragma unroll
+        for (int kk = 0; kk < 2; ++kk) {
+            if (norm.dst[kk] != nullptr && c_block >= norm.c0[kk] && c_block < norm.c1[kk]) {
+                k = kk;
+            }
+        }
+        if (k >= 0) {
+            __shared__ float s_y[ncols];
+            s_y[threadIdx.x] = y;
+            __syncthreads();
+            if (threadIdx.x < WARP_SIZE) {
+                const float4 xs = ((const float4 *) s_y)[threadIdx.x];
+                float tmp = 0.0f;
+                tmp += xs.x*xs.x + xs.y*xs.y + xs.z*xs.z + xs.w*xs.w;
+                tmp = warp_reduce_sum(tmp);
+                const float scale = rsqrtf(tmp / ncols + norm.eps[k]);
+                float4 r = make_float4(scale*xs.x, scale*xs.y, scale*xs.z, scale*xs.w);
+                r.x *= norm.scale[k];
+                r.y *= norm.scale[k];
+                r.z *= norm.scale[k];
+                r.w *= norm.scale[k];
+                ((float4 *) (norm.dst[k] + (c_block - norm.c0[k])))[threadIdx.x] = r;
+            }
+        }
+    }
+
+#pragma unroll
+    for (int j = 0; j < d_conv - 1; ++j) {
+        state_out[(int64_t) c*(d_conv - 1) + j] = xw[j + 1];
+    }
+}
+
+void ggml_cuda_op_ssm_conv_step(ggml_backend_cuda_context & ctx, const ggml_tensor * state_rows, const ggml_tensor * x,
+                                const ggml_tensor * conv_w, ggml_tensor * state_out, ggml_tensor * dst,
+                                const ggml_tensor * const * norm, const ggml_tensor * const * norm_scale) {
+    const int d_conv     = conv_w->ne[0];
+    const int n_channels = conv_w->ne[1];
+    GGML_ASSERT(d_conv == 4);
+    const int threads = 128;
+
+    ssm_conv_step_norm args = {};
+    bool has_norm = false;
+    for (int k = 0; norm != nullptr && k < 2; ++k) {
+        if (norm[k] == nullptr) {
+            continue;
+        }
+        const ggml_tensor * view = norm[k]->src[0];
+        GGML_ASSERT(n_channels % threads == 0 && view->ne[0] == threads && view->view_offs % (threads*sizeof(float)) == 0);
+        args.dst[k]   = (float *) norm_scale[k]->data;
+        args.c0[k]    = view->view_offs / sizeof(float);
+        args.c1[k]    = args.c0[k] + ggml_nelements(view);
+        args.eps[k]   = ggml_get_op_params_f32(norm[k], 0);
+        args.scale[k] = ggml_get_op_params_f32(norm_scale[k], 0);
+        has_norm = true;
+    }
+
+    auto kernel = has_norm ? ssm_conv_step_f32<4, true> : ssm_conv_step_f32<4, false>;
+    kernel<<<(n_channels + threads - 1) / threads, threads, 0, ctx.stream()>>>(
+        (const float *) state_rows->src[0]->data, (const int32_t *) state_rows->src[1]->data,
+        state_rows->src[0]->nb[1] / sizeof(float), (const float *) x->data, (const float *) conv_w->data, nullptr,
+        (float *) state_out->data, (float *) dst->data, n_channels, args);
+}

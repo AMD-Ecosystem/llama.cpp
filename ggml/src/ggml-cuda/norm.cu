@@ -99,6 +99,56 @@ static __device__ __forceinline__ void rms_norm_store_q8_1(block_q8_1 * y, const
     }
 }
 
+// The identity-comb hyper-connection combine of one token, gated (see dsv4_hc_post_f32), followed by the RMS norm of
+// each stream times mul with MMVQ's q8_1 copy: block row combines stream row and normalizes it as
+// rms_norm_f32<block_size, 1, true, true, false, false, true> does, from the combined values instead of loading them.
+// Thread tid reads and writes the values 4*tid ... 4*tid + 3 of its stream only, so dst may be residual.
+template <int block_size>
+static __global__ void hc_post_rms_norm_f32(
+        const float * x, const float * residual, const float * post, float * post_dst, float * dst,
+        const float * mul, block_q8_1 * q8_1, const int ncols, const int64_t sr1, const int64_t sp0,
+        const int64_t sd1, const int64_t mul_stride_row, const float gate_scale_in, const float gate_scale_out,
+        const float eps) {
+    const int row = blockIdx.x;
+    const int tid = threadIdx.x;
+
+    extern __shared__ float s_sum[];
+
+    float p = post[row*sp0];
+    p = gate_scale_out * (1.0f / (1.0f + expf(-(gate_scale_in * p))));
+
+    const int ncols4 = ncols / 4;
+    float4    xs     = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float     tmp    = 0.0f;
+    if (tid < ncols4) {
+        const float4 xv = ((const float4 *) x)[tid];
+        const float4 rv = ((const float4 *) (residual + row*sr1))[tid];
+        xs.x = xv.x * p;
+        xs.x += rv.x;
+        xs.y = xv.y * p;
+        xs.y += rv.y;
+        xs.z = xv.z * p;
+        xs.z += rv.z;
+        xs.w = xv.w * p;
+        xs.w += rv.w;
+        ((float4 *) (post_dst + row*sd1))[tid] = xs;
+        tmp += xs.x*xs.x + xs.y*xs.y + xs.z*xs.z + xs.w*xs.w;
+    }
+    tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
+    const float scale = rsqrtf(tmp / ncols + eps);
+
+    if (tid < ncols4) {
+        float4 r = make_float4(scale*xs.x, scale*xs.y, scale*xs.z, scale*xs.w);
+        const float4 m = ((const float4 *) (mul + row*mul_stride_row))[tid];
+        r.x *= m.x;
+        r.y *= m.y;
+        r.z *= m.z;
+        r.w *= m.w;
+        ((float4 *) (dst + row*ncols))[tid] = r;
+        rms_norm_store_q8_1(q8_1 + row*(ncols/QK8_1), tid, r);
+    }
+}
+
 template <int block_size, int vpt, bool do_vec, bool do_multiply = false, bool do_add = false, bool do_scale = false,
           bool do_q8_1 = false>
 static __global__ void rms_norm_f32(const float * x,
@@ -815,6 +865,75 @@ bool ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
                                  /*add_s00*/ 0, 0, 0,
                                  0, 0, 0, 0,
                                  eps, stream, q8_1);
+}
+
+static bool ggml_cuda_ranges_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const char * a0 = (const char *) a->data;
+    const char * b0 = (const char *) b->data;
+    return a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(a);
+}
+
+bool ggml_cuda_hc_post_rms_norm_supported(const ggml_tensor * post, const ggml_tensor * gate_scale_in,
+                                          const float * post_data, const ggml_tensor * rms, const ggml_tensor * mul) {
+    if (gate_scale_in == nullptr || post->src[3] != nullptr || rms->src[0] != post) {
+        return false;
+    }
+    const ggml_tensor * x        = post->src[0];
+    const ggml_tensor * residual = post->src[1];
+    const ggml_tensor * p        = gate_scale_in->src[0];
+    const ggml_tensor * mul_src  = mul->src[0] == rms ? mul->src[1] : mul->src[0];
+    const int64_t ncols = post->ne[0];
+    const int64_t hc    = residual->ne[1];
+    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || p->type != GGML_TYPE_F32 ||
+            post->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32 || mul_src->type != GGML_TYPE_F32) {
+        return false;
+    }
+    // one token, contiguous rows, the shapes of the separate ops
+    if (x->ne[1] != 1 || residual->ne[2] != 1 || post->ne[1] != hc || ggml_nrows(post) != hc ||
+            x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) ||
+            !ggml_is_contiguous(mul) || !ggml_are_same_shape(mul, post) || ggml_nrows(rms) != hc) {
+        return false;
+    }
+    if (mul_src->ne[0] != ncols || (mul_src->ne[1] != hc && mul_src->ne[1] != 1) || ggml_nrows(mul_src) != mul_src->ne[1] ||
+            mul_src->nb[0] != sizeof(float)) {
+        return false;
+    }
+    // the configuration rms_norm_f32_dispatch picks for the RMS_NORM + MUL fusion with the q8_1 copy
+    const int64_t n4 = ncols / 4;
+    if (ncols % MATRIX_ROW_PADDING != 0 || n4 <= 512 || n4 > 1024 || ((uintptr_t) mul->data & 15) != 0 ||
+            !ggml_cuda_is_aligned(post, 16) || !ggml_cuda_is_aligned(mul_src, 16) || !ggml_cuda_is_aligned(x, 16) ||
+            !ggml_cuda_is_aligned(residual, 16) || residual->nb[1] % 16 != 0 || post->nb[1] % 16 != 0) {
+        return false;
+    }
+    // the norm is written while other blocks still read the inputs of the combine (post_data in place of p), except
+    // where each block reads it, the same stream of residual
+    const bool on_residual = mul->data == residual->data && residual->nb[1] == ncols*sizeof(float);
+    return !ggml_cuda_ranges_overlap(mul, x) && (on_residual || !ggml_cuda_ranges_overlap(mul, residual)) &&
+        (post_data != nullptr || !ggml_cuda_ranges_overlap(mul, p)) && !ggml_cuda_ranges_overlap(mul, post);
+}
+
+void ggml_cuda_op_hc_post_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * post,
+                                   const ggml_tensor * gate_scale_in, const ggml_tensor * gate_scale_out,
+                                   const float * post_data, const ggml_tensor * rms, ggml_tensor * mul,
+                                   block_q8_1 * q8_1) {
+    const ggml_tensor * x        = post->src[0];
+    const ggml_tensor * residual = post->src[1];
+    const ggml_tensor * p        = gate_scale_in->src[0];
+    const ggml_tensor * mul_src  = mul->src[0] == rms ? mul->src[1] : mul->src[0];
+
+    float eps = 0.0f;
+    memcpy(&eps, rms->op_params, sizeof(float));
+
+    const int     ncols = post->ne[0];
+    const int64_t hc    = residual->ne[1];
+
+    const int64_t mul_stride_row = mul_src->ne[1] == 1 ? 0 : mul_src->nb[1] / sizeof(float);
+    constexpr int block_size = 1024;
+    hc_post_rms_norm_f32<block_size><<<hc, block_size, (block_size/WARP_SIZE)*sizeof(float), ctx.stream()>>>(
+        (const float *) x->data, (const float *) residual->data, post_data ? post_data : (const float *) p->data,
+        (float *) post->data, (float *) mul->data, (const float *) mul_src->data, q8_1, ncols,
+        residual->nb[1] / sizeof(float), p->nb[0] / sizeof(float), post->nb[1] / sizeof(float), mul_stride_row,
+        ggml_get_op_params_f32(gate_scale_in, 0), ggml_get_op_params_f32(gate_scale_out, 0), eps);
 }
 
 void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,

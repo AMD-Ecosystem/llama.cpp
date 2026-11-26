@@ -198,12 +198,21 @@ static inline __device__ void bitonic_step(const float * x_row, int * dst_row, c
 // shared memory limit) sort with several columns per thread. Every
 // (k, j) stage runs all owned columns before the barrier; a pair
 // (col, col ^ j) is exchanged by the owner of its lower index only.
-template<ggml_sort_order order>
-static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad) {
+template<ggml_sort_order order, bool keys_in_smem = false>
+static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad, const int ncols_out) {
     const int row = blockIdx.x;
 
-    const float * x_row = x + row * ncols;
     extern __shared__ int dst_row[];
+
+    // the keys from shared memory when keys_in_smem: the network reads two of them per compare-exchange
+    const float * x_row = x + row * ncols;
+    if constexpr (keys_in_smem) {
+        float * x_smem = (float *) (dst_row + ncols_pad);
+        for (int col = threadIdx.x; col < ncols; col += blockDim.x) {
+            x_smem[col] = x_row[col];
+        }
+        x_row = x_smem;
+    }
 
     // initialize indices
     for (int col = threadIdx.x; col < ncols_pad; col += blockDim.x) {
@@ -221,9 +230,9 @@ static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int n
         }
     }
 
-    // copy the result to dst without the padding
-    for (int col = threadIdx.x; col < ncols; col += blockDim.x) {
-        dst[row * ncols + col] = dst_row[col];
+    // copy the first ncols_out of the result to dst
+    for (int col = threadIdx.x; col < ncols_out; col += blockDim.x) {
+        dst[row * ncols_out + col] = dst_row[col];
     }
 }
 
@@ -240,7 +249,11 @@ void argsort_f32_i32_cuda_bitonic(const float *   x,
                                   const int       ncols,
                                   const int       nrows,
                                   ggml_sort_order order,
-                                  cudaStream_t    stream) {
+                                  cudaStream_t    stream,
+                                  int             ncols_out) {
+    if (ncols_out < 0) {
+        ncols_out = ncols;
+    }
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
 
@@ -249,16 +262,32 @@ void argsort_f32_i32_cuda_bitonic(const float *   x,
     const dim3 block_dims(ncols_pad < CUDA_ARGSORT_BLOCK_SIZE ? ncols_pad : CUDA_ARGSORT_BLOCK_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
+    const size_t smpb       = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
-    GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
+    GGML_ASSERT(shared_mem <= smpb);
+
+    // the keys in shared memory too where they fit, see k_argsort_f32_i32
+    const size_t shared_mem_keys = shared_mem + ncols * sizeof(float);
+    if (shared_mem_keys <= smpb) {
+        if (order == GGML_SORT_ORDER_ASC) {
+            k_argsort_f32_i32<GGML_SORT_ORDER_ASC, true>
+                <<<block_nums, block_dims, shared_mem_keys, stream>>>(x, dst, ncols, ncols_pad, ncols_out);
+        } else if (order == GGML_SORT_ORDER_DESC) {
+            k_argsort_f32_i32<GGML_SORT_ORDER_DESC, true>
+                <<<block_nums, block_dims, shared_mem_keys, stream>>>(x, dst, ncols, ncols_pad, ncols_out);
+        } else {
+            GGML_ABORT("fatal error");
+        }
+        return;
+    }
 
     if (order == GGML_SORT_ORDER_ASC) {
         k_argsort_f32_i32<GGML_SORT_ORDER_ASC>
-            <<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad);
+            <<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ncols_out);
     } else if (order == GGML_SORT_ORDER_DESC) {
         k_argsort_f32_i32<GGML_SORT_ORDER_DESC>
-            <<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad);
+            <<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ncols_out);
     } else {
         GGML_ABORT("fatal error");
     }

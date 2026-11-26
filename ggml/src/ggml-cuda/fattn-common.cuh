@@ -1051,7 +1051,8 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false,
+    const int max_blocks_per_sm_override = 0
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1217,6 +1218,9 @@ void launch_fattn(
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
     GGML_ASSERT(max_blocks_per_sm > 0);
+    if (max_blocks_per_sm_override > 0) {
+        max_blocks_per_sm = max_blocks_per_sm_override;
+    }
     int parallel_blocks = max_blocks_per_sm;
 
     const int64_t n_kv = use_sparse ? n_kv_max : n_kv_cols;
@@ -1390,10 +1394,10 @@ void launch_fattn(
 
         // the graph evaluation may ask for MMVQ's q8_1 copy of the result (rows of whole, unpadded 32-value blocks)
         block_q8_1 * q8_1 = nullptr;
-        if (ctx.fa_q8_1 && DV % QK8_1 == 0 && warp_size == QK8_1 && ggml_is_contiguous(KQV) &&
+        if (ctx.out_q8_1 && DV % QK8_1 == 0 && warp_size == QK8_1 && ggml_is_contiguous(KQV) &&
                 (KQV->ne[0]*KQV->ne[1]) % MATRIX_ROW_PADDING == 0) {
-            q8_1 = ctx.fa_q8_1;
-            ctx.fa_q8_1_written = true;
+            q8_1 = ctx.out_q8_1;
+            ctx.out_q8_1_written = true;
         }
 
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);

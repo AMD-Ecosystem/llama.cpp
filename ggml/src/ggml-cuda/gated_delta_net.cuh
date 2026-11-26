@@ -9,6 +9,10 @@ struct ggml_cuda_gated_delta_net_fused_cache {
 
 void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
+// the GET_ROWS node that gathers the recurrent state of gdn when the kernel reads that state in place in the cache,
+// through the row indices, instead of the gathered copy; nullptr otherwise
+const ggml_tensor * ggml_cuda_gdn_state_rows(const ggml_tensor * gdn);
+
 // same op, but writes the snapshot(s) into the cache instead of dst (see ggml_cuda_try_gdn_cache_fusion)
 void ggml_cuda_op_gated_delta_net_fused_cache(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
                                               ggml_cuda_gated_delta_net_fused_cache cache);

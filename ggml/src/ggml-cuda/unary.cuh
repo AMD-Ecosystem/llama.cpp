@@ -91,7 +91,23 @@ void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
 void ggml_cuda_op_xielu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
-void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node);
+// returns whether it also wrote q8_1, MMVQ's q8_1 copy of mul_node (when q8_1 is not nullptr and the layout allows)
+bool ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node,
+                            block_q8_1 * q8_1 = nullptr);
+
+// unary(scale(x)); returns whether it also wrote q8_1, MMVQ's q8_1 copy of unary_node with its rows padded to
+// MATRIX_ROW_PADDING (when q8_1 is not nullptr)
+bool ggml_cuda_op_scale_unary(ggml_backend_cuda_context & ctx, ggml_tensor * scale_node, ggml_tensor * unary_node,
+                              block_q8_1 * q8_1 = nullptr);
+
+// add_node = a + x*unary(g), mul_node = x*unary(g) with one value of unary(g) per row of x
+void ggml_cuda_op_unary_mul_add(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node,
+                                ggml_tensor * add_node);
+
+// gate = softplus(alpha_mm + dt)*a and beta = sigmoid(beta_mm) for one token, the alpha and beta products of a gated
+// delta net layer (F32 weights) included, in one kernel
+void ggml_cuda_op_gdn_alpha_beta(ggml_backend_cuda_context & ctx, const ggml_tensor * alpha_mm, const ggml_tensor * dt,
+                                 const ggml_tensor * a, ggml_tensor * gate, const ggml_tensor * beta_mm, ggml_tensor * beta);
 
 void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * relu_node, ggml_tensor * sqr_node);
 
