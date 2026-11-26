@@ -77,6 +77,10 @@
 #include "ggml-cuda/top-k-mask.cuh"
 #include "ggml.h"
 
+#ifdef GGML_HIP_HIPEP
+#include "ggml-cuda/hipep/hipep.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -990,6 +994,10 @@ static std::atomic<int> ggml_cuda_lock_counter;
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+
+#ifdef GGML_HIP_HIPEP
+    ggml_cuda_hipep_free(hipep);
+#endif
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
@@ -5561,6 +5569,17 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
+#ifdef GGML_HIP_HIPEP
+    // a split with runs hip-ep compiled: the rest runs here, without CUDA graphs
+    const auto run_rest = [cuda_ctx](ggml_cgraph * rest) {
+        cuda_ctx->stream_context().concurrent_events.clear();
+        ggml_cuda_graph_evaluate_and_capture(cuda_ctx, rest, false, false, nullptr);
+    };
+    if (ggml_cuda_hipep_graph_compute(cuda_ctx->device, cuda_ctx->stream(), &cuda_ctx->hipep, cgraph, run_rest)) {
+        return GGML_STATUS_SUCCESS;
+    }
+#endif
+
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
     const void * graph_key = nullptr;
@@ -5798,6 +5817,10 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
         }
     }
+
+#ifdef GGML_HIP_HIPEP
+    ggml_cuda_hipep_precompile(cuda_ctx->device, &cuda_ctx->hipep, cgraph, params);
+#endif
 
 #ifdef USE_CUDA_GRAPH
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
@@ -7028,6 +7051,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
     }
+#ifdef GGML_HIP_HIPEP
+    if (strcmp(name, "ggml_backend_reads_split_outputs") == 0 && ggml_cuda_hipep_enabled()) {
+        return (void *)(ggml_backend_reads_split_outputs_t) ggml_cuda_hipep_reads_split_outputs;
+    }
+#endif
     return nullptr;
 }
 

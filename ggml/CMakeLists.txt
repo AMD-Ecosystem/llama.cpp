@@ -220,6 +220,7 @@ option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"   
 option(GGML_HIP_MMQ_MFMA                    "ggml: enable MFMA MMA for CDNA in MMQ"           ON)
 option(GGML_HIP_EXPORT_METRICS              "ggml: enable kernel perf metrics output"         OFF)
 option(GGML_HIP_UNSAFE_MATH                 "ggml: compile HIP with -funsafe-math-optimizations" OFF)
+option(GGML_HIP_HIPEP                       "ggml: run what hip-ep compiles of each split"     OFF)
 option(GGML_MUSA_GRAPHS                     "ggml: use MUSA graph, experimental, unstable"    OFF)
 option(GGML_MUSA_MUDNN_COPY                 "ggml: enable muDNN for accelerated copy"         OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
@@ -263,11 +264,6 @@ set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
 
 option(GGML_OPENVINO                        "ggml: use OPENVINO"                              OFF)
-option(GGML_HIPEP                           "ggml: use hip-ep's compiled splits (over HIP)"   OFF)
-if (GGML_HIPEP)
-    # HIPEP runs over ggml-hip: its devices, buffers and what it does not compile are ggml-hip's
-    set(GGML_HIP ON)
-endif()
 option(GGML_ET                              "ggml: use ET backend"                            OFF)
 option(GGML_ET_SYSEMU                       "ggml: use ET backend via sysemu"                 OFF)
 
@@ -350,7 +346,6 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-webgpu.h
     include/ggml-zendnn.h
     include/ggml-openvino.h
-    include/ggml-hipep.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")

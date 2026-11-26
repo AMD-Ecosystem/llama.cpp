@@ -1427,6 +1427,11 @@ struct ggml_backend_cuda_context {
 
     std::unique_ptr<ggml_cuda_stream_context> concurrent_stream_context;
 
+#ifdef GGML_HIP_HIPEP
+    // hip-ep's state of this backend (ggml-cuda/hipep/hipep.h)
+    void * hipep = nullptr;
+#endif
+
     ~ggml_backend_cuda_context();
 
     cudaStream_t stream(int device, int stream) {

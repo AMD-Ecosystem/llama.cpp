@@ -73,10 +73,23 @@ list(APPEND GGML_SOURCES_ROCM ${SRCS})
 ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 
+if (GGML_HIP_HIPEP)
+    # libhipep_backend (hip-ep): its package, <prefix>/lib/cmake/hipep_backend
+    find_package(hipep_backend REQUIRED)
+    list(APPEND GGML_HEADERS_ROCM ../ggml-cuda/hipep/hipep.h ../ggml-cuda/hipep/split-desc.h)
+    set(GGML_SOURCES_ROCM_HIPEP ../ggml-cuda/hipep/hipep.cpp ../ggml-cuda/hipep/split-desc.cpp)
+endif()
+
 ggml_add_backend_library(ggml-hip
                          ${GGML_HEADERS_ROCM}
                          ${GGML_SOURCES_ROCM}
+                         ${GGML_SOURCES_ROCM_HIPEP}
                         )
+
+if (GGML_HIP_HIPEP)
+    add_compile_definitions(GGML_HIP_HIPEP)
+    target_link_libraries(ggml-hip PRIVATE hipep_backend::hipep_backend)
+endif()
 
 # TODO: do not use CUDA definitions for HIP
 if (NOT GGML_BACKEND_DL)
