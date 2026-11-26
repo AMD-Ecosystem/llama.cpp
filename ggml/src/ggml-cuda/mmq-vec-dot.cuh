@@ -677,7 +677,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #if defined(AMD_WMMA_AVAILABLE)
     // x_qs holds scale*q, x_dm holds (d, dmin*m) per 16-value subblock, d is the same for all subblocks.
     // The y scale is constant over 64 values, so 4 MMAs accumulate in int32 before one float update.
-    // The dmin*m term is a [16 x 8 subblocks] x [8 subblocks x 16] product, done as one f16 MMA.
+    // The dmin*m term of subblocks 0-5 is a [16 x 6] x [6 x 16] product, done as one f16 MMA.
+    // Subblocks 6-7 use float: their sums come from an MMA here and may not fit in f16.
     constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  4, int,   input_layout>        tile_A;
     typedef tile<16,  4, int,   input_layout>        tile_B;
@@ -701,6 +702,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     tile_A A[ntx][2][4];
     tile_M M[ntx];
     float  d[ntx][tile_C::ne];
+    half2  m67[ntx][tile_C::ne];
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
 #pragma unroll
@@ -713,14 +715,16 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
         for (int l = 0; l < tile_M::ne; ++l) {
             const int kk = tile_M::get_j(l);
-            if (kk < 4) {
+            if (kk < 3) {
                 const half2 * dm = x_dm + (i0 + n*tile_M::I + tile_M::get_i(l))*sram_stride + k00/4 + 2*kk;
                 M[n].x[l] = __hneg2(__halves2half2(__high2half(dm[0]), __high2half(dm[1])));
             }
         }
 #pragma unroll
         for (int l = 0; l < tile_C::ne; ++l) {
-            d[n][l] = __low2float(x_dm[(i0 + n*tile_C::I + tile_C::get_i(l))*sram_stride + k00/4]);
+            const half2 * dm = x_dm + (i0 + n*tile_C::I + tile_C::get_i(l))*sram_stride + k00/4;
+            d[n][l]   = __low2float(dm[0]);
+            m67[n][l] = __halves2half2(__high2half(dm[6]), __high2half(dm[7]));
         }
     }
 
@@ -738,6 +742,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
         float  t[ntx][tile_C::ne];
         tile_M S;
+        float  s6 = 0.0f;
+        float  s7 = 0.0f;
 #pragma unroll
         for (int h = 0; h < 2; ++h) {
             tile_B B[4];
@@ -765,13 +771,13 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 tile_C C7;
                 mma(C6, ones, B[2]);
                 mma(C7, ones, B[3]);
+                s6 = dB.y*C6.x[0];
+                s7 = dB.y*C7.x[0];
 #pragma unroll
                 for (int l = 0; l < tile_M::ne; ++l) {
                     const int kk = tile_M::get_j(l);
                     if (kk < 3) {
                         S.x[l] = y_ds[j*MMQ_TILE_Y_K + 1 + kk];
-                    } else if (kk == 3) {
-                        S.x[l] = __floats2half2_rn(dB.y*C6.x[0], dB.y*C7.x[0]);
                     }
                 }
             }
@@ -782,7 +788,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             tile_S acc;
 #pragma unroll
             for (int l = 0; l < tile_C::ne; ++l) {
-                acc.x[l] = sum[(j0/tile_C::J + n)*tile_C::ne + l] + d[n][l]*t[n][l];
+                acc.x[l] = sum[(j0/tile_C::J + n)*tile_C::ne + l] + d[n][l]*t[n][l]
+                    - __low2float(m67[n][l])*s6 - __high2float(m67[n][l])*s7;
             }
             mma(acc, M[n], S);
 #pragma unroll

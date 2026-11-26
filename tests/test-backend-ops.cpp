@@ -13438,6 +13438,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t nb : {1, 3, 5, 7}) {
         test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 512, 768, nb, 1));
     }
+    // More than 512 queries: AMD copies strided K/V to contiguous first, n_cells < kv pads the list with -1.
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 4096, 1024, 600, 1));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 1000, 1024, 777, 1));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, 1024, 600, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}));
     // Padded GQA heads must not read past the attention sinks.
     for (int64_t nb : {1, 4}) {
         test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, 512, nb, true, true, 0, 0,

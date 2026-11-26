@@ -1134,6 +1134,9 @@ void launch_fattn(
     const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
 
+    // declared first: the VMM pool must free in reverse order of allocation
+    ggml_cuda_pool_alloc<half>   K_cont(pool);
+    ggml_cuda_pool_alloc<half>   V_cont(pool);
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
@@ -1214,8 +1217,6 @@ void launch_fattn(
 
     // AMD: large batches are many times slower if the K/V rows of a head are not contiguous (TLB misses), so copy them first
     const int32_t * kv_rows_data = kv_rows ? (const int32_t *) kv_rows->data : nullptr;
-    ggml_cuda_pool_alloc<half> K_cont(pool);
-    ggml_cuda_pool_alloc<half> V_cont(pool);
     auto cont_kv = [&](const ggml_tensor * t, const char *& data, size_t & nb1, size_t & nb2, size_t & nb3, ggml_cuda_pool_alloc<half> & buf) {
         const int     ne0_16 = t->ne[0]*sizeof(half)/sizeof(int4);
         const int64_t n      = int64_t(ne0_16)*n_kv_cols*t->ne[2]*t->ne[3];
