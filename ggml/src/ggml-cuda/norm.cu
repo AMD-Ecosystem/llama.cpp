@@ -1026,3 +1026,95 @@ void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     l2_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
 }
+
+// One token of the Qwen HC norm: 4 streams of 2560. The normalized values stay in shared memory
+// for the 4-row inject dot, so that matmul does not read the 84 MB activation again.
+static __global__ void rms_norm_hc_inject_f32(
+        const float * __restrict__ x,
+        const float * __restrict__ gamma,
+        const float * __restrict__ w,
+        float * __restrict__ xn,
+        float * __restrict__ inj,
+        int n_tokens, float eps, float scale_s, float scale_b) {
+    constexpr int n_embd = 2560;
+    constexpr int hc     = 4;
+    constexpr int k      = n_embd * hc;
+    constexpr int nth    = 256;
+
+    __shared__ float vals[k];
+    __shared__ float red[nth];
+
+    const int token = blockIdx.x;
+    const int tid   = threadIdx.x;
+    if (token >= n_tokens) {
+        return;
+    }
+
+    const float * x_t = x + (int64_t) token * k;
+    float *       y_t = xn + (int64_t) token * k;
+
+    for (int s = 0; s < hc; ++s) {
+        float ss = 0.0f;
+        for (int i = tid; i < n_embd; i += nth) {
+            const float v = x_t[s * n_embd + i];
+            ss += v * v;
+        }
+        red[tid] = ss;
+        __syncthreads();
+        for (int off = nth / 2; off > 0; off >>= 1) {
+            if (tid < off) {
+                red[tid] += red[tid + off];
+            }
+            __syncthreads();
+        }
+        const float inv = rsqrtf(red[0] / n_embd + eps);
+        for (int i = tid; i < n_embd; i += nth) {
+            const float y = inv * x_t[s * n_embd + i] * gamma[s * n_embd + i];
+            vals[s * n_embd + i] = y;
+            y_t[s * n_embd + i]  = y;
+        }
+        __syncthreads();
+    }
+
+    float dot[hc] = {0.0f, 0.0f, 0.0f, 0.0f};
+    for (int i = tid; i < k; i += nth) {
+        const float y = vals[i];
+#pragma unroll
+        for (int r = 0; r < hc; ++r) {
+            dot[r] += y * w[r * k + i];
+        }
+    }
+#pragma unroll
+    for (int r = 0; r < hc; ++r) {
+        red[tid] = dot[r];
+        __syncthreads();
+        for (int off = nth / 2; off > 0; off >>= 1) {
+            if (tid < off) {
+                red[tid] += red[tid + off];
+            }
+            __syncthreads();
+        }
+        if (tid == 0) {
+            inj[(int64_t) token * hc + r] = scale_s * red[0] + scale_b;
+        }
+        __syncthreads();
+    }
+}
+
+void ggml_cuda_op_rms_norm_hc_inject(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * rms, const ggml_tensor * mul, const ggml_tensor * mm, const ggml_tensor * scale) {
+    float eps;
+    memcpy(&eps, rms->op_params, sizeof(float));
+    const float scale_s = scale ? ggml_get_op_params_f32(scale, 0) : 1.0f;
+    const float scale_b = scale ? ggml_get_op_params_f32(scale, 1) : 0.0f;
+    const ggml_tensor * dst_inj = scale ? scale : mm;
+
+    const int n_tokens = (int) rms->ne[2];
+    const dim3 block(256, 1, 1);
+    const dim3 grid(n_tokens, 1, 1);
+    const ggml_cuda_kernel_launch_params launch = ggml_cuda_kernel_launch_params(grid, block, 0, ctx.stream());
+    ggml_cuda_kernel_launch(rms_norm_hc_inject_f32, launch,
+            (const float *) rms->src[0]->data, (const float *) mul->src[1]->data, (const float *) mm->src[0]->data,
+            (float *) mul->data, (float *) dst_inj->data,
+            n_tokens, eps, scale_s, scale_b);
+}

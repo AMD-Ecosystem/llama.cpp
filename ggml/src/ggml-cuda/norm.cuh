@@ -24,4 +24,8 @@ bool ggml_cuda_op_rms_norm_fused_add_rms(ggml_backend_cuda_context & ctx, ggml_t
 
 void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
+// RMSNorm+mul of [2560, 4, T] and the 4-row F32 inject that reads it, one pass over the normalized values.
+void ggml_cuda_op_rms_norm_hc_inject(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * rms, const ggml_tensor * mul, const ggml_tensor * mm, const ggml_tensor * scale);
+
 void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst);

@@ -2,6 +2,8 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include <algorithm>
+
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/graph.cuh"
@@ -4823,11 +4825,207 @@ static int ggml_cuda_ssm_conv_concat_match(const ggml_cgraph * cgraph, int i) {
     return 1;
 }
 
+// Qwen HC prefill: the 4-row F32 inject reads the same normalized activation as HC down.
+// Returns the last node index covered by the RMS_NORM at i when the matmul sits next to that norm
+// (only views in between), or -1. require_adjacent is false while reordering the graph.
+static int ggml_cuda_hc_inject_find(const ggml_cgraph * cgraph, int i, bool require_adjacent, int * mul_i_out) {
+    const ggml_tensor * rms = cgraph->nodes[i];
+    if (rms->op != GGML_OP_RMS_NORM || rms->type != GGML_TYPE_F32 || rms->src[0]->type != GGML_TYPE_F32) {
+        return -1;
+    }
+    if (rms->ne[0] != 2560 || rms->ne[1] != 4 || rms->ne[2] < 32 || rms->ne[3] != 1 || !ggml_is_contiguous(rms->src[0])) {
+        return -1;
+    }
+    if (i + 1 >= cgraph->n_nodes) {
+        return -1;
+    }
+    const ggml_tensor * mul = cgraph->nodes[i + 1];
+    if (mul->op != GGML_OP_MUL || mul->src[0] != rms || !ggml_is_contiguous(mul)) {
+        return -1;
+    }
+    const ggml_tensor * gamma = mul->src[1];
+    if (gamma->type != GGML_TYPE_F32 || gamma->ne[0] != 2560 || gamma->ne[1] != 4 || gamma->ne[2] != 1 ||
+            !ggml_is_contiguous(gamma)) {
+        return -1;
+    }
+
+    int mm_i = -1;
+    for (int j = i + 2; j < cgraph->n_nodes; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        if (n->op != GGML_OP_MUL_MAT || n->src[0]->type != GGML_TYPE_F32) {
+            continue;
+        }
+        const ggml_tensor * w   = n->src[0];
+        const ggml_tensor * act = n->src[1];
+        if (w->ne[0] != 10240 || w->ne[1] != 4 || w->ne[2] != 1 || !ggml_is_contiguous(w) || act->ne[0] != 10240) {
+            continue;
+        }
+        const bool act_ok = act == mul || act->src[0] == mul || act->view_src == mul;
+        if (!act_ok) {
+            continue;
+        }
+        mm_i = j;
+        break;
+    }
+    if (mm_i < 0) {
+        return -1;
+    }
+    if (require_adjacent) {
+        for (int j = i + 2; j < mm_i; ++j) {
+            if (!ggml_cuda_is_view_or_noop(cgraph->nodes[j])) {
+                return -1;
+            }
+        }
+    }
+    int last = mm_i;
+    if (mm_i + 1 < cgraph->n_nodes) {
+        const ggml_tensor * sc = cgraph->nodes[mm_i + 1];
+        if (sc->op == GGML_OP_SCALE && sc->src[0] == cgraph->nodes[mm_i] && ggml_is_contiguous(sc) &&
+                ggml_node_has_n_uses(cgraph, mm_i, 1)) {
+            last = mm_i + 1;
+        }
+    }
+    if (mul_i_out) {
+        *mul_i_out = i + 1;
+    }
+    return last;
+}
+
+static void ggml_cuda_hc_inject_reorder(ggml_cgraph * cgraph) {
+    for (int i = 0; i + 2 < cgraph->n_nodes; ++i) {
+        int mul_i = -1;
+        const int last = ggml_cuda_hc_inject_find(cgraph, i, /*require_adjacent =*/ false, &mul_i);
+        if (last < 0) {
+            continue;
+        }
+        int mm_i = last;
+        if (cgraph->nodes[last]->op == GGML_OP_SCALE) {
+            mm_i = last - 1;
+        }
+        const ggml_tensor * act = cgraph->nodes[mm_i]->src[1];
+        int insert_after = mul_i;
+        for (int j = mul_i + 1; j < mm_i; ++j) {
+            if (cgraph->nodes[j] == act) {
+                insert_after = j;
+            }
+        }
+        if (mm_i == insert_after + 1) {
+            continue;
+        }
+        bool used = false;
+        for (int j = insert_after + 1; j < mm_i && !used; ++j) {
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                const ggml_tensor * src = cgraph->nodes[j]->src[s];
+                if (src == cgraph->nodes[mm_i] || src == cgraph->nodes[last]) {
+                    used = true;
+                }
+            }
+        }
+        if (used) {
+            continue;
+        }
+        std::rotate(cgraph->nodes + insert_after + 1, cgraph->nodes + mm_i, cgraph->nodes + last + 1);
+    }
+}
+
+// q8_0 10240x320 MUL_MAT whose next computed node is the gated HC_PRE that consumes it.
+// Returns the HC_PRE index, or -1.
+static int ggml_cuda_hc_up_pre_match(const ggml_cgraph * cgraph, int i) {
+    const ggml_tensor * mm = cgraph->nodes[i];
+    if (mm->op != GGML_OP_MUL_MAT) {
+        return -1;
+    }
+    const ggml_tensor * w  = mm->src[0];
+    const ggml_tensor * lo = mm->src[1];
+    if (w->type != GGML_TYPE_Q8_0 || w->ne[0] != 320 || w->ne[1] != 10240 || w->ne[2] != 1 || !ggml_is_contiguous(w)) {
+        return -1;
+    }
+    if (lo->type != GGML_TYPE_F32 || lo->ne[0] != 320 || lo->ne[1] < 32 || lo->ne[2] != 1 || !ggml_is_contiguous(lo)) {
+        return -1;
+    }
+    if (!ggml_node_has_n_uses(cgraph, i, 1)) {
+        return -1;
+    }
+    int pre_i = -1;
+    for (int j = i + 1; j < cgraph->n_nodes && j < i + 6; ++j) {
+        if (ggml_cuda_is_view_or_noop(cgraph->nodes[j])) {
+            continue;
+        }
+        if (cgraph->nodes[j]->op != GGML_OP_DSV4_HC_PRE) {
+            return -1;
+        }
+        pre_i = j;
+        break;
+    }
+    if (pre_i < 0 || ggml_get_op_params_i32(cgraph->nodes[pre_i], 1) == 0) {
+        return -1;
+    }
+    const ggml_tensor * pre  = cgraph->nodes[pre_i];
+    const ggml_tensor * gate = pre->src[1];
+    const ggml_tensor * xn   = pre->src[0];
+    const bool gate_ok = gate == mm || gate->src[0] == mm || gate->view_src == mm;
+    if (!gate_ok || xn->type != GGML_TYPE_F32 || xn->ne[0] != 2560 || xn->ne[1] != 4 || xn->ne[2] != lo->ne[1]) {
+        return -1;
+    }
+    if (xn->nb[0] != sizeof(float) || pre->nb[0] != sizeof(float) || pre->type != GGML_TYPE_F32) {
+        return -1;
+    }
+    return pre_i;
+}
+
+static bool ggml_cuda_hc_inject_on(const ggml_backend_cuda_context * cuda_ctx) {
+    static const int sw = ggml_cuda_env_switch("GGML_HIP_HC_INJECT");
+    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+    return ggml_cuda_switch_or_rdna3_5(sw, cc);
+}
+
+static bool ggml_cuda_hc_up_on(const ggml_backend_cuda_context * cuda_ctx) {
+    // The fused q8_0 up + HC_PRE kernel is slower than the two existing kernels on gfx1151
+    // (about 14 ms vs 2.2 ms at n=2048). HC_PRE is already at the DRAM ceiling, so leave this off
+    // unless GGML_HIP_HC_UP=1.
+    static const int sw = ggml_cuda_env_switch("GGML_HIP_HC_UP");
+    GGML_UNUSED(cuda_ctx);
+    return sw == 1;
+}
+
 // try and fuse nodes and return the number of nodes to skip
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     if (ggml_cuda_fusion_disabled()) {
         return 0;
+    }
+
+    if (ggml_cuda_hc_inject_on(cuda_ctx)) {
+        const int inj_last = ggml_cuda_hc_inject_find(cgraph, i, /*require_adjacent =*/ true, nullptr);
+        if (inj_last > i) {
+            const int out_nodes[] = { inj_last };
+            const ggml_tensor * produced = cgraph->nodes[inj_last];
+            const ggml_tensor * xn       = cgraph->nodes[i + 1];
+            const bool aliases_xn = produced->data && xn->data &&
+                    (const char *) produced->data < (const char *) xn->data + ggml_nbytes(xn) &&
+                    (const char *) xn->data < (const char *) produced->data + ggml_nbytes(produced);
+            if (!aliases_xn && ggml_cuda_check_fusion_memory_ranges(cgraph, i, inj_last - i + 1, out_nodes, 1)) {
+                int mm_i = inj_last;
+                const ggml_tensor * scale = nullptr;
+                if (cgraph->nodes[inj_last]->op == GGML_OP_SCALE) {
+                    scale = cgraph->nodes[inj_last];
+                    mm_i -= 1;
+                }
+                ggml_cuda_op_rms_norm_hc_inject(*cuda_ctx, cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[mm_i], scale);
+                return inj_last - i;
+            }
+        }
+    }
+
+    if (ggml_cuda_hc_up_on(cuda_ctx)) {
+        const int pre_i = ggml_cuda_hc_up_pre_match(cgraph, i);
+        if (pre_i > i) {
+            const int out_nodes[] = { pre_i };
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, pre_i - i + 1, out_nodes, 1)) {
+                ggml_cuda_op_hc_up_pre(*cuda_ctx, cgraph->nodes[i], cgraph->nodes[pre_i]);
+                return pre_i - i;
+            }
+        }
     }
 
     ggml_tensor * node = cgraph->nodes[i];
@@ -5995,6 +6193,10 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
+    if (ggml_cuda_hc_inject_on(cuda_ctx)) {
+        ggml_cuda_hc_inject_reorder(cgraph);
+    }
+
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
     const void * graph_key = nullptr;
@@ -6097,6 +6299,10 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
         }
     };
+
+    if (!disable_fusion && ggml_cuda_hc_inject_on(cuda_ctx)) {
+        ggml_cuda_hc_inject_reorder(cgraph);
+    }
 
     if (!disable_fusion) {
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
