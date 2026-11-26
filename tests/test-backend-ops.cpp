@@ -12487,6 +12487,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 37, 2, false, 65, n, 256, 0, false, true));
         }
     }
+    // q2_K MMQ with full row tiles and more than 32 columns per tile
+    for (int n : {64, 96, 256, 512}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, 128, n, 512, {1, 1}, {1, 1}));
+        for (bool broadcast : {false, true}) {
+            test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_K, GGML_TYPE_F32, 8, 2, broadcast, 128, n, 512));
+        }
+    }
 
     // Both experts receive every token
     for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K}) {

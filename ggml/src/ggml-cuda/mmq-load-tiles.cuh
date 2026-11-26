@@ -604,7 +604,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         for (int l = 0; l < QR2_K; ++l) {
             const int k = (kqsx/8)*32 + l*8 + kqsx % 8;
 
-            const int x_qs_k = (x_ql_0 >> (2*l)) & 0x03030303;
+            int x_qs_k = (x_ql_0 >> (2*l)) & 0x03030303;
+
+#if defined(AMD_WMMA_AVAILABLE)
+            // fold the 4-bit scale of the 16-value subblock into the values (max 15*3 = 45)
+            x_qs_k *= bxi->scales[(kqsx/8)*8 + 2*l + (kqsx % 8)/4] & 0x0F;
+#endif // defined(AMD_WMMA_AVAILABLE)
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
             x_qs[i*sram_stride           + k] = x_qs_k;
@@ -614,7 +619,9 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
         const int sc_m = bxi->scales[kqsx];
-#ifdef FAST_FP16_AVAILABLE
+#if defined(AMD_WMMA_AVAILABLE)
+        const half2 x_dm_ik = __hmul2(bxi->dm, make_half2(1, sc_m >> 4));
+#elif defined(FAST_FP16_AVAILABLE)
         const half2 x_dm_ik = __hmul2(bxi->dm, make_half2(sc_m & 0x0F, sc_m >> 4));
 #else
         const float2 bxi_dmf = __half22float2(bxi->dm);
