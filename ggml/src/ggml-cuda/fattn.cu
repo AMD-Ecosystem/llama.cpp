@@ -17,11 +17,17 @@ static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
     return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
 }
 
+// gather only the K/V rows that a sparse mask keeps (e.g. Qwen QSA) instead of reading the whole cache
+static bool ggml_cuda_fattn_rdna_sparse_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_SPARSE");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
-template <int ncols1, bool oob>
-__launch_bounds__(256, 1)
+template <int ncols1, bool oob, int nthreads>
+__launch_bounds__(nthreads, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
         const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30, const int n_queries,
         const int n_kv_max, const int64_t s31, const int64_t s33) {
@@ -50,7 +56,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
     const half * mask = mask_ptr + sequence*s33 + q0*s31;
     int32_t * indices = indices_ptr + (int64_t(sequence)*gridDim.x + group)*n_kv_max;
 
-    __shared__ int warp_offsets[256/warp_size];
+    __shared__ int warp_offsets[nthreads/warp_size];
     __shared__ int row_count;
     __shared__ int chunk_count;
 
@@ -84,7 +90,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         if (tid == 0) {
             int offset = 0;
 #pragma unroll
-            for (int iw = 0; iw < 256/warp_size; ++iw) {
+            for (int iw = 0; iw < nthreads/warp_size; ++iw) {
                 const int count = warp_offsets[iw];
                 warp_offsets[iw] = offset;
                 offset += count;
@@ -135,13 +141,25 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     const int64_t s31 = mask->nb[1] / sizeof(half);
     const int64_t s33 = mask->nb[3] / sizeof(half);
     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
-    const dim3 block_dim(256, 1, 1);
+    // each block scans its whole mask row serially, with few lists (decode) wider blocks shorten the scan
+    const bool wide = int64_t(blocks_num.x)*blocks_num.y < ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+    const dim3 block_dim(wide ? 1024 : 256, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
     // the last group of queries is partial only if ncols1 does not divide n_queries
-    GGML_ASSERT(ncols1 == 1 || ncols1 == 8);
-    const auto kernel = ncols1 == 1       ? flash_attn_mask_to_sparse_indices<1, false> :
-                        n_queries % 8 != 0 ? flash_attn_mask_to_sparse_indices<8, true>  :
-                                             flash_attn_mask_to_sparse_indices<8, false>;
+    const bool oob = n_queries % ncols1 != 0;
+    decltype(&flash_attn_mask_to_sparse_indices<1, false, 256>) kernel = nullptr;
+    auto select = [&](auto ncols1_c) {
+        constexpr int nc = decltype(ncols1_c)::value;
+        if (ncols1 == nc) {
+            kernel = oob ? (wide ? flash_attn_mask_to_sparse_indices<nc, true,  1024> : flash_attn_mask_to_sparse_indices<nc, true,  256>) :
+                           (wide ? flash_attn_mask_to_sparse_indices<nc, false, 1024> : flash_attn_mask_to_sparse_indices<nc, false, 256>);
+        }
+    };
+    select(std::integral_constant<int, 1>{});
+    select(std::integral_constant<int, 2>{});
+    select(std::integral_constant<int, 4>{});
+    select(std::integral_constant<int, 8>{});
+    GGML_ASSERT(kernel != nullptr);
     ggml_cuda_kernel_launch(kernel, launch_params,
         (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
@@ -173,11 +191,38 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
     // the dense kernel handles up to 64/ncols2 queries per K/V pass, the single-query gather has to beat that
     const int64_t n_gather = (ncols1 == 1 ? std::min<int64_t>(Q->ne[1], 64/ncols2) : ncols1) * (int64_t) n_kv_max;
 
-    return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc)) && dst->src[5] == nullptr &&
+    // the WMMA kernel has no variant with fewer than 16 columns
+    const bool rdna_sparse = amd_wmma_available(cc) && ncols1*ncols2 >= 16 && Q->ne[0] <= 256 && ggml_cuda_fattn_rdna_sparse_enabled(cc);
+    // sparse tiles narrower than the full width but wider than one query are only dispatched on RDNA
+    if (!rdna_sparse && ncols1 != 1 && ncols1*ncols2 != 64) {
+        return false;
+    }
+    // on RDNA a list holds the union of the queries in a tile and a gathered row costs about 1.5 dense rows,
+    // for prompt batches the dense kernel is slower per row and neighbouring queries select overlapping rows,
+    // the 8x8 tile breaks even with the dense kernel at K = 6*n_kv_max, the 2x16 tile (all heads of a KV head in
+    // one tile) at 4*n_kv_max: it is faster than dense for every batch size and mask type tested at K = 4*n_kv_max
+    // (8192 for n_kv_max = 2048), but not at 2x n_kv_max and not at 3x with 512 queries
+    const int64_t n_kv_min_prompt = ncols2 == 16 ? 4LL*n_kv_max : 3*ncols1*n_kv_max/4;
+    const int64_t n_kv_min = rdna_sparse ? (Q->ne[1] > 8 ? n_kv_min_prompt : 3*std::min<int64_t>(ncols1, Q->ne[1])*n_kv_max/2) :
+        GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max;
+
+    return ((GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc)) || amd_mfma_available(cc) || rdna_sparse) && dst->src[5] == nullptr &&
         mask != nullptr && n_kv_max > 0 && max_bias == 0.0f && logit_softcap == 0.0f &&
         mask->ne[0] == K->ne[1] && mask->ne[1] >= Q->ne[1] && mask->ne[2] == 1 &&
-        K->ne[1] >= std::max<int64_t>(4096, GGML_CUDA_CC_IS_NVIDIA(cc) ? 2*n_gather : 2LL*n_kv_max);
+        K->ne[1] >= std::max<int64_t>(4096, n_kv_min);
 #endif // !defined(GGML_USE_MUSA)
+}
+
+template <int DKQ, int DV, int ncols1, int ncols2>
+static bool ggml_cuda_flash_attn_ext_mma_f16_try_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const int cc) {
+    if constexpr (ncols1 >= 1 && ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2)) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, ncols2)) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, ncols1, ncols2>(ctx, dst);
+            return true;
+        }
+    }
+    GGML_UNUSED_VARS(ctx, dst, cc);
+    return false;
 }
 
 template <int DKQ, int DV, int ncols2>
@@ -191,6 +236,18 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         constexpr bool has_wide_sparse = ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 64/ncols2, ncols2);
         if (!(has_wide_sparse && Q->ne[1] > 32/ncols2) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, ncols2)) {
             ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
+            return;
+        }
+    }
+    // on RDNA small batches take the narrowest sparse tile that holds them
+    if (amd_wmma_available(cc)) {
+        if (Q->ne[1] <= 16/ncols2 && ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 16/ncols2, ncols2>(ctx, dst, cc)) {
+            return;
+        }
+        if (Q->ne[1] <= 32/ncols2 && ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 32/ncols2, ncols2>(ctx, dst, cc)) {
+            return;
+        }
+        if (ggml_cuda_flash_attn_ext_mma_f16_try_sparse<DKQ, DV, 64/ncols2, ncols2>(ctx, dst, cc)) {
             return;
         }
     }
@@ -284,8 +341,23 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
             return;
         }
 
-        // small batches are K/V bandwidth bound, large batches fill the tiles without padding
-        if (use_gqa_opt && gqa_ratio > 4 && Q->ne[1] <= 8 && ggml_cuda_fattn_rdna_gqa_pad_enabled(cc)) {
+        // GQA 12 prompt batches: one 16-head tile per KV head reads each gathered row once, and the
+        // tile is limited by WMMA work, which grows with the union of its queries, so 2 queries per tile
+        // (union about 0.4x that of 8 queries for Qwen QSA) beat wider tiles that read K/V less often
+        if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 2, 16)) {
+            if (use_gqa_opt && gqa_ratio > 8 && gqa_ratio < 16 && Q->ne[1] > 8 &&
+                    ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 2, 16)) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 2, 16>(ctx, dst);
+                return;
+            }
+        }
+
+        // small batches are K/V bandwidth bound, large batches fill the tiles without padding,
+        // unless the 8x8 sparse tile gathers far fewer rows than the dense kernel reads
+        const bool sparse_pad = use_gqa_opt && gqa_ratio > 4 && Q->ne[1] > 8 &&
+            ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 8, 8) &&
+            ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 8, 8);
+        if (use_gqa_opt && gqa_ratio > 4 && (sparse_pad || (Q->ne[1] <= 8 && ggml_cuda_fattn_rdna_gqa_pad_enabled(cc)))) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
         }

@@ -4207,6 +4207,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_UBATCH"));
     add_opt(common_arg(
+        {"--spec-draft-qsa"}, "{auto,on,off}",
+        "sparse attention (QSA) of an MTP block whose GGUF stores dense attention (qwen4exp only): auto uses dense attention "
+        "while the context is short and QSA beyond a model specific length (default: auto)",
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.speculative.draft.mtp_qsa = LLAMA_MTP_QSA_AUTO;
+            } else if (value == "on") {
+                params.speculative.draft.mtp_qsa = LLAMA_MTP_QSA_ON;
+            } else if (value == "off") {
+                params.speculative.draft.mtp_qsa = LLAMA_MTP_QSA_OFF;
+            } else {
+                throw std::invalid_argument("invalid value, must be one of: auto, on, off");
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_QSA"));
+    add_opt(common_arg(
         {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
         [](common_params & params, const std::string & value) {

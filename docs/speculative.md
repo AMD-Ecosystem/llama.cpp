@@ -251,6 +251,9 @@ Use exactly one of these options:
 --spec-draft-n-ubatch                   N
                                         physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH)
+--spec-draft-qsa                        {auto,on,off}
+                                        sparse attention (QSA) of an MTP block whose GGUF stores dense attention (qwen4exp only): auto uses dense attention while the context is short and QSA beyond a model specific length (default: auto)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_QSA)
 --spec-draft-p-split, --draft-p-split   P
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)

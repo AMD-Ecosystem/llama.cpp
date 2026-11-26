@@ -203,13 +203,13 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            // reset the draft context to the checkpoint before verification
+            // Drop the speculative tail and keep a catch-up that draft() fused in below n_past.
             if (ctx_dft) {
                 if (use_ckpt_dft) {
                     GGML_ASSERT(ckpt.load_dft(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
                 }
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, ckpt.pos_max + 1, -1);
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, n_past, -1);
             }
         } else {
             // we have a previous (partial) draft to reuse from checkpoint restoration

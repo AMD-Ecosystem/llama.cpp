@@ -216,6 +216,7 @@ llama_context::llama_context(
     embd_layer_inp.resize(hparams.n_layer() + 1);
 
     cparams.ctx_type          = params.ctx_type;
+    cparams.mtp_qsa           = params.mtp_qsa;
     cparams.rope_scaling_type = params.rope_scaling_type;
     cparams.pooling_type      = params.pooling_type;
 
@@ -252,6 +253,22 @@ llama_context::llama_context(
             // used to read the target's layer input device buffer
             cparams.ctx_other = params.ctx_other;
         }
+    }
+
+    // an MTP draft head that leaves out token_embd and output borrows both from its target model
+    if (model.arch == LLM_ARCH_QWEN4EXP && (model.tok_embd == nullptr || model.output == nullptr)) {
+        if (params.ctx_other == nullptr) {
+            throw std::runtime_error(model.arch_name() + " has no token_embd/output of its own and requires ctx_other to be set "
+                    "(load it as the draft model of its target, not on its own)");
+        }
+
+        const llama_model & model_tgt = params.ctx_other->get_model();
+        if (model_tgt.arch != model.arch || model_tgt.tok_embd == nullptr || model_tgt.output == nullptr ||
+            model_tgt.hparams.n_embd != hparams.n_embd || model_tgt.vocab.n_tokens() != model.vocab.n_tokens()) {
+            throw std::runtime_error(model.arch_name() + ": the target model cannot provide token_embd/output for this draft head");
+        }
+
+        cparams.ctx_other = params.ctx_other;
     }
 
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
@@ -527,6 +544,11 @@ llama_context::llama_context(
                     ggml_backend_buffer_name    (buf_output.get()),
                     ggml_backend_buffer_get_size(buf_output.get()) / 1024.0 / 1024.0);
         }
+    }
+
+    // a dense qwen4exp MTP block that the cache can never take to the QSA length stays dense and keeps no indexer state
+    if (cparams.mtp_qsa == LLAMA_MTP_QSA_AUTO && cparams.n_ctx_seq < LLAMA_MTP_QSA_MIN_KV) {
+        cparams.mtp_qsa = LLAMA_MTP_QSA_OFF;
     }
 
     // init the memory module
@@ -4429,6 +4451,7 @@ llama_context_params llama_context_default_params() {
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
         /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.mtp_qsa                     =*/ LLAMA_MTP_QSA_AUTO,
         /*.rope_freq_base              =*/ 0.0f,
         /*.rope_freq_scale             =*/ 0.0f,
         /*.yarn_ext_factor             =*/ -1.0f,

@@ -285,6 +285,28 @@ static void test(void) {
     assert(params.speculative.draft.n_max == 123);
 
     {
+        // MTP draft head options: auto by default
+        common_params mtp_params;
+        assert(mtp_params.speculative.draft.mtp_qsa == LLAMA_MTP_QSA_AUTO);
+
+        argv = {"binary_name", "--spec-draft-qsa", "off"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mtp_params, LLAMA_EXAMPLE_SERVER));
+        assert(mtp_params.speculative.draft.mtp_qsa == LLAMA_MTP_QSA_OFF);
+        assert(common_context_params_to_llama(mtp_params).mtp_qsa == LLAMA_MTP_QSA_OFF);
+
+        argv = {"binary_name", "--spec-draft-qsa", "on"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mtp_params, LLAMA_EXAMPLE_SERVER));
+        assert(mtp_params.speculative.draft.mtp_qsa == LLAMA_MTP_QSA_ON);
+
+        argv = {"binary_name", "--spec-draft-qsa", "auto"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mtp_params, LLAMA_EXAMPLE_SERVER));
+        assert(mtp_params.speculative.draft.mtp_qsa == LLAMA_MTP_QSA_AUTO);
+
+        argv = {"binary_name", "--spec-draft-qsa", "maybe"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), mtp_params, LLAMA_EXAMPLE_SERVER));
+    }
+
+    {
         common_params synth_params;
         argv = {"binary_name", "--spec-synth-len", "3.4"};
         assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));

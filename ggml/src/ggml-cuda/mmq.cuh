@@ -1018,7 +1018,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion>
+// ksplit: compile the stream-k body for one Q8_0 tile even when the arch config leaves stream-k off,
+// so a few-row prefill can cut K without changing every other Q8_0 matmul.
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion, bool ksplit = false>
 __launch_bounds__(ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1), ggml_cuda_mmq_get_occupancy(type, J, fallback, prec_src1))
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const char * __restrict__ x_gate, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
@@ -1072,7 +1074,7 @@ static __global__ void mul_mat_q(
     __syncthreads();
 
     // The fused kernel needs the whole K range of a tile in one block, so it always uses tiling.
-    if constexpr (has_fusion || !ggml_cuda_mmq_get_stream_k(type, J, fallback, prec_src1)) {
+    if constexpr (has_fusion || (!ggml_cuda_mmq_get_stream_k(type, J, fallback, prec_src1) && !ksplit)) {
         // The fused kernel writes the GLU of I/2 up rows and I/2 gate rows per tile.
         constexpr int I_dst = has_fusion ? I/2 : I;
 
@@ -1497,6 +1499,53 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const uint3 nsamples_y_fd      = init_fastdiv_values(args.nsamples_y);
     const uint3 channel_ratio_fd   = init_fastdiv_values(channel_ratio);
     const uint3 sample_ratio_fd    = init_fastdiv_values(sample_ratio);
+
+    // Q8_0 with a few output rows and a long K (HC down, 320 x 10240) leaves too few tiles to hide
+    // DRAM latency. Cut K into `splits` slices per tile and add the partials with the stream-k fixup.
+    // The RDNA stream-k launch caps the grid at nsm, which is the wrong direction here, so this path
+    // launches splits * ntiles blocks instead of turning config.stream_k on for every Q8_0 matmul.
+    if constexpr (!has_fusion && type == GGML_TYPE_Q8_0 && J == 128 && fallback) {
+        static int ksplit_env = -2;
+        if (ksplit_env == -2) {
+            const char * env = getenv("GGML_HIP_MMQ_KSPLIT");
+            ksplit_env = env ? atoi(env) : 4;
+        }
+        const int qk = ggml_cuda_type_traits<type>::qk;
+        const bool few_rows = ksplit_env > 1 && args.ids_dst == nullptr && GGML_CUDA_CC_IS_RDNA3_5(cc) &&
+                args.nrows_x >= 256 && args.nrows_x <= 384 && args.ncols_x >= 8192 && args.ncols_dst >= 32 &&
+                args.nchannels_y == 1 && args.nsamples_y == 1 && args.ncols_x % qk == 0;
+        if (few_rows) {
+            const int k_blocks = (int) (args.ncols_x / qk);
+            int splits = ksplit_env;
+            while (splits > 1 && k_blocks % splits != 0) {
+                --splits;
+            }
+            if (splits > 1) {
+                CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, fallback, prec_src1, false, true>), nbytes_shared);
+                const int ntiles  = (int) args.ntj * nti * ntzw;
+                const int nblocks = ntiles * splits;
+                ggml_cuda_pool & pool = ctx.pool(id);
+                ggml_cuda_pool_alloc<float> tmp_fixup(pool);
+                tmp_fixup.alloc((size_t) nblocks * config.J * config.I);
+                const dim3 block_nums(nblocks, 1, 1);
+                mul_mat_q<type, J, fallback, prec_src1, false, true><<<block_nums, block_dims, nbytes_shared, stream>>>
+                    (args.x, (const char *) args.fusion.gate, args.y, args.ids_dst, args.tile_spec, args.dst, tmp_fixup.ptr,
+                     args.y_scale, args.fusion.glu_op, args.fusion.glu_limit, (const float *) args.fusion.x_scale, (const float *) args.fusion.gate_scale,
+                     blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
+                     channel_ratio_fd, nchannels_y_fd, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
+                     sample_ratio_fd, nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst,
+                     ntj_fd);
+                const dim3 block_nums_fixup(nblocks, config.I / warp_size, 1);
+                const dim3 block_dims_fixup(block_dims.x, block_dims.y / 2, block_dims.z);
+                CUDA_CHECK(cudaGetLastError());
+                mul_mat_q_stream_k_fixup<type, J, fallback, prec_src1><<<block_nums_fixup, block_dims_fixup, 0, stream>>>
+                    (args.ids_dst, args.tile_spec, args.dst, tmp_fixup.ptr, blocks_per_ne00_fd, args.nrows_x, args.ncols_dst,
+                     args.nrows_dst, nchannels_y_fd, args.stride_channel_dst, nsamples_y_fd, args.stride_sample_dst,
+                     ntj_fd);
+                return;
+            }
+        }
+    }
 
     if (has_fusion || !config.stream_k) {
         GGML_ASSERT(nti <= 65535); // gridDim.y limit

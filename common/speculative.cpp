@@ -1601,6 +1601,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     int32_t n_batch_tgt = 0;
     std::vector<int32_t> verify_row0; // [n_seq] device row of the first verify row, see verify_h_rows
 
+    // Generation verify batches (every row wants logits, 2 .. n_max+1 tokens) skip the catch-up
+    // decode. The next draft() replays only the accepted rows plus the new token, and asks for
+    // logits on the new token alone, so the draft weights are read once.
+    // defer_h0 is pending_h as process() saw it: the state paired with the first verify token.
+    std::vector<char>                  defer_on;
+    std::vector<int32_t>               defer_n_acc; // -1 until accept(); draft tokens accepted, not counting the first verify token
+    std::vector<std::vector<llama_token>> defer_id;
+    std::vector<std::vector<llama_pos>>   defer_pos;
+    std::vector<std::vector<float>>       defer_h0;
+
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -1651,7 +1661,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
-        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
+        // ctx_other is also set when a draft head borrows token_embd/output from its target (qwen4exp), that
+        // shares no memory: only the gemma4 assistant runs on the KV cache of its target
+        char arch_dft[64] = {0};
+        llama_model_meta_val_str(llama_get_model(ctx_dft), "general.architecture", arch_dft, sizeof(arch_dft));
+        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt && std::strcmp(arch_dft, "gemma4-assistant") == 0;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ is_mem_shared);
@@ -1678,6 +1692,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         n_batch_tgt = (int32_t) llama_n_batch(ctx_tgt);
         verify_row0.assign(n_seq, -1);
+
+        defer_on.assign(n_seq, 0);
+        defer_n_acc.assign(n_seq, -1);
+        defer_id.assign(n_seq, {});
+        defer_pos.assign(n_seq, {});
+        defer_h0.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
         // shared memory and chained heads keep the host rows
         if (!is_mem_shared && !chain_heads) {
@@ -1708,9 +1728,69 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         backend_chains.clear();
     }
 
+    // A verify batch is short and every row asks for logits. Prompt rows do not, except the last one.
+    bool seq_defer_catchup(const common_batch & batch_in, llama_seq_id seq_id) const {
+        static const bool off = getenv("LLAMA_MTP_NO_FUSE") != nullptr;
+        if (off || is_mem_shared || chain_heads) {
+            return false;
+        }
+        const int32_t beg = i_batch_beg[seq_id];
+        const int32_t end = i_batch_end[seq_id];
+        if (beg < 0) {
+            return false;
+        }
+        const int32_t n_rows = end - beg + 1;
+        if (n_rows < 2 || n_rows > this->params.n_max + 1) {
+            return false;
+        }
+        for (int32_t k = beg; k <= end; ++k) {
+            const auto & tok = batch_in.tokens[k];
+            if (!tok.output || tok.id == LLAMA_TOKEN_NULL) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Write a catch-up that draft() did not consume (no draft call after accept).
+    bool flush_deferred() {
+        if (is_mem_shared || chain_heads) {
+            return true;
+        }
+
+        batch.clear();
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (!defer_on[seq_id] || defer_n_acc[seq_id] < 0) {
+                continue;
+            }
+            const int32_t n_have = (int32_t) defer_id[seq_id].size();
+            const int32_t n_keep = std::min(defer_n_acc[seq_id] + 1, n_have);
+            for (int32_t t = 0; t < n_keep; ++t) {
+                const int32_t idx = batch.add(defer_id[seq_id][t], defer_pos[seq_id][t], seq_id, false);
+                const float * h_row = t == 0
+                    ? defer_h0[seq_id].data()
+                    : verify_h[seq_id].data() + (size_t) (t - 1) * n_embd;
+                batch.set_embd_state(idx, { h_row, 1, (size_t) n_embd });
+            }
+            defer_on[seq_id] = 0;
+            defer_n_acc[seq_id] = -1;
+        }
+        if (batch.size() == 0) {
+            return true;
+        }
+        const int32_t rc = llama_process(params.ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        if (rc != 0) {
+            SPC_ERR("deferred catch-up flush failed rc=%d\n", (int) rc);
+            return false;
+        }
+        return true;
+    }
+
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
         // reset here rather than per round, or two identical requests differ
         common_sampler_reset(smpls[seq_id].get());
+        defer_on[seq_id] = 0;
+        defer_n_acc[seq_id] = -1;
 
         const int32_t N = (int32_t) prompt.size();
         if (N <= 0) {
@@ -1740,6 +1820,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const int32_t n_tokens = batch_in.size();
 
+        if (!flush_deferred()) {
+            return false;
+        }
+
         // remember the first and last batch index for each sequence
         std::fill(i_batch_beg.begin(), i_batch_beg.end(), -1);
         std::fill(i_batch_end.begin(), i_batch_end.end(), -1);
@@ -1760,8 +1844,25 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
-        // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
-        if (!is_mem_shared) {
+        std::vector<char> defer_now(n_seq, 0);
+        bool any_catchup = false;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_beg[seq_id] < 0) {
+                continue;
+            }
+            if (seq_defer_catchup(batch_in, seq_id)) {
+                defer_now[seq_id] = 1;
+                std::memcpy(defer_h0[seq_id].data(), pending_h[seq_id].data(), row_bytes);
+            } else {
+                defer_on[seq_id] = 0;
+                defer_n_acc[seq_id] = -1;
+                any_catchup = true;
+            }
+        }
+
+        // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode.
+        // a deferred verify batch is caught up later, inside draft(), together with the new token.
+        if (!is_mem_shared && any_catchup) {
             batch.clear();
 
             // pair each token with the tgt embedding shifted right by one position, and
@@ -1773,7 +1874,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             if (dev_rows) {
                 GGML_ASSERT(n_tokens <= n_batch_tgt && "the target batch exceeds the h_nextn device buffer");
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                    if (i_batch_beg[seq_id] >= 0) {
+                    if (i_batch_beg[seq_id] >= 0 && !defer_now[seq_id]) {
                         llama_set_embeddings_nextn_rows(ctx_tgt, n_batch_tgt + seq_id, 1, pending_h[seq_id].data());
                     }
                 }
@@ -1785,6 +1886,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 const auto & t = batch_in.tokens[k];
 
                 const llama_seq_id seq_id = t.seq_id;
+                if (defer_now[seq_id]) {
+                    continue;
+                }
 
                 // vision tokens carry an embedding instead of an id
                 const int32_t idx = t.id != LLAMA_TOKEN_NULL
@@ -1855,10 +1959,32 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             verify_h_rows[seq_id] = h_rows;
 
+            if (defer_now[seq_id]) {
+                defer_on[seq_id] = 1;
+                defer_n_acc[seq_id] = -1;
+                defer_id[seq_id].resize(h_rows);
+                defer_pos[seq_id].resize(h_rows);
+                for (int32_t i = 0; i < h_rows; ++i) {
+                    defer_id[seq_id][i]  = batch_in.tokens[h_offset + i].id;
+                    defer_pos[seq_id][i] = batch_in.tokens[h_offset + i].pos[0];
+                }
+            }
+
             if (dev_rows) {
-                // the rows stay on the device until the next target decode, only the pending row comes to the host
+                // the rows stay on the device until the next target decode, only the pending row comes to the host.
+                // a deferred catch-up runs on the next draft(), after that decode, so those rows are copied now.
                 verify_row0[seq_id] = h_offset;
-                llama_get_embeddings_nextn_rows(ctx_tgt, h_offset + h_rows - 1, 1, pending_h[seq_id].data());
+                if (defer_now[seq_id]) {
+                    verify_h[seq_id].resize((size_t) h_rows * n_embd);
+                    if (!llama_get_embeddings_nextn_rows(ctx_tgt, h_offset, h_rows, verify_h[seq_id].data())) {
+                        SPC_ERR("failed to copy h_nextn rows for the deferred catch-up (seq_id=%d)\n", (int) seq_id);
+                        return false;
+                    }
+                    std::memcpy(pending_h[seq_id].data(),
+                            verify_h[seq_id].data() + (size_t) (h_rows - 1) * n_embd, row_bytes);
+                } else {
+                    llama_get_embeddings_nextn_rows(ctx_tgt, h_offset + h_rows - 1, 1, pending_h[seq_id].data());
+                }
                 continue;
             }
 
@@ -1908,6 +2034,26 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             if (!dp.result_q) {
                 common_sampler_reset(smpls[seq_id].get());
             }
+
+            const bool fuse = defer_on[seq_id] && defer_n_acc[seq_id] >= 0 && !chain_heads && !is_mem_shared;
+            if (fuse) {
+                const int32_t n_have = (int32_t) defer_id[seq_id].size();
+                const int32_t n_keep = std::min(defer_n_acc[seq_id] + 1, n_have);
+                if (n_keep <= 0 || defer_pos[seq_id][n_keep - 1] + 1 != dp.pos0) {
+                    SPC_ERR("deferred catch-up does not meet the new token (seq_id=%d, n_keep=%d, pos0=%d) - drafting the new token only\n",
+                            (int) seq_id, (int) n_keep, (int) dp.pos0);
+                } else {
+                    for (int32_t t = 0; t < n_keep; ++t) {
+                        const int32_t idx = batch.add(defer_id[seq_id][t], defer_pos[seq_id][t], seq_id, false);
+                        const float * h_row = t == 0
+                            ? defer_h0[seq_id].data()
+                            : verify_h[seq_id].data() + (size_t) (t - 1) * n_embd;
+                        batch.set_embd_state(idx, { h_row, 1, (size_t) n_embd });
+                    }
+                }
+            }
+            defer_on[seq_id] = 0;
+            defer_n_acc[seq_id] = -1;
 
             const int32_t idx = batch.add(dp.id_last, dp.pos0, seq_id, true);
             batch.set_embd_state(idx, { pending_h[seq_id].data(), 1, (size_t) n_embd });
@@ -2052,6 +2198,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             return;
         }
 
+        if (defer_on[seq_id]) {
+            defer_n_acc[seq_id] = (int32_t) n_accepted;
+        }
+
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
         if (dev_rows) {
             // process() already fetched the last row
@@ -2085,6 +2235,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             return;
         }
         std::memcpy(pending_h[seq_id].data(), data.data(), row_bytes);
+        defer_on[seq_id] = 0;
+        defer_n_acc[seq_id] = -1;
     }
 };
 

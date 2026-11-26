@@ -228,6 +228,13 @@ extern "C" {
         LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
+    // sparse attention (QSA) of an MTP block whose GGUF says dense attention (e.g. the qwen4exp "shared" MTP files)
+    enum llama_mtp_qsa_type {
+        LLAMA_MTP_QSA_AUTO = 0, // dense while the KV cache is short, QSA beyond a model specific length
+        LLAMA_MTP_QSA_OFF  = 1, // always dense
+        LLAMA_MTP_QSA_ON   = 2, // always QSA
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -380,6 +387,9 @@ extern "C" {
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
         enum llama_flash_attn_type   flash_attn_type;   // when to enable Flash Attention
+
+        // MTP draft head options, only read by the qwen4exp MTP context (ctx_type MTP), ignored elsewhere
+        enum llama_mtp_qsa_type      mtp_qsa;           // sparse attention of a dense MTP block
 
         // ref: https://github.com/ggml-org/llama.cpp/pull/2054
         float    rope_freq_base;   // RoPE base frequency, 0 = from model

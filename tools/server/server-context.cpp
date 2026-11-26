@@ -3940,7 +3940,9 @@ private:
 
             slot.stats.n_draft_tokens += draft.size();
 
-            // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+            // Drop the speculative tail. The committed prefix stays: an MTP verify catch-up is
+            // fused into draft() and lands at positions below pos_next, after this checkpoint
+            // was taken. [TAG_SPEC_AVOID_DRAFT_REEVAL]
             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
             if (ctx_dft) {
@@ -3948,7 +3950,8 @@ private:
                     GGML_ASSERT(ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
                 }
 
-                if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, ckpt.pos_max + 1, -1)) {
+                const llama_pos pos_spec = slot.prompt.tokens.pos_next();
+                if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, pos_spec, -1)) {
                     GGML_ABORT("failed to remove sequence %d\n", slot.id);
                 }
             }
@@ -4773,9 +4776,9 @@ private:
             metrics_post_decode(off, batch.view.size(), has_output);
         }
 
-        // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
-        //       for now, always re-evaluate for simplicity
-        //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
+        // Stash target h for the draft. A qwen MTP verify batch does not decode here: draft()
+        // catches up the accepted rows together with the new token. [TAG_SPEC_AVOID_DRAFT_REEVAL]
+        // ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
         if (spec) {
             bool ok = true;
             queue_tasks.yield_to_queue([&]() {
