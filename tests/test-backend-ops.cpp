@@ -5101,6 +5101,72 @@ struct test_dsv4_hc_pre : public test_dsv4_hc {
     }
 };
 
+// RMSNorm of the Qwen HC activation plus the 4-row F32 inject that reads it.
+// check_down also multiplies the q8_0 down matrix and adds its first 4 rows, so a wrong norm fails too.
+struct test_hc_inject : public test_case {
+    const int64_t n_tokens;
+    const bool    check_down;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "HC_INJECT";
+    }
+    std::string vars() override { return VARS_TO_STR2(n_tokens, check_down); }
+    test_hc_inject(int64_t n_tokens, bool check_down = false) : n_tokens(n_tokens), check_down(check_down) {}
+    double max_nmse_err() override { return check_down ? 5e-4 : 2e-4; }
+    // Keep perf from cloning the scale output thousands of times and hiding the fused kernel.
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 1000ULL * 1000 * 1000 * 1000;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_embd = 2560;
+        const int64_t hc     = 4;
+        const int64_t k      = n_embd * hc;
+        ggml_tensor * x      = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_tensor * gamma  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, hc);
+        ggml_tensor * w_inj  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, hc);
+        ggml_tensor * xn     = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), gamma);
+        xn = ggml_reshape_2d(ctx, xn, k, n_tokens);
+        ggml_tensor * inj = ggml_scale(ctx, ggml_mul_mat(ctx, w_inj, xn), 0.25f);
+        if (check_down) {
+            ggml_tensor * w_down = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, k, 320);
+            ggml_tensor * down   = ggml_mul_mat(ctx, w_down, xn);
+            ggml_tensor * head   = ggml_view_2d(ctx, down, hc, n_tokens, down->nb[1], 0);
+            inj = ggml_add(ctx, inj, head);
+        }
+        return inj;
+    }
+};
+
+// q8_0 up 10240x320 followed by gated DSV4_HC_PRE on the same stream layout.
+struct test_hc_up_pre : public test_case {
+    const int64_t n_tokens;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "HC_UP_PRE";
+    }
+    std::string vars() override { return VARS_TO_STR1(n_tokens); }
+    explicit test_hc_up_pre(int64_t n_tokens) : n_tokens(n_tokens) {}
+    double max_nmse_err() override { return 5e-4; }
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 1000ULL * 1000 * 1000 * 1000;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_embd = 2560;
+        const int64_t hc     = 4;
+        ggml_tensor * w  = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 320, n_embd * hc);
+        ggml_tensor * lo = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 320, n_tokens);
+        ggml_tensor * xn = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_tensor * gate = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, w, lo), n_embd, hc, n_tokens);
+        return ggml_dsv4_hc_pre_gated(ctx, xn, gate, 0.25f);
+    }
+};
+
 struct test_dsv4_hc_post : public test_dsv4_hc {
     const int64_t n_embd;
     const int64_t n_tokens;
@@ -11163,6 +11229,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_pre(4096, 4, 21));
     test_cases.emplace_back(new test_dsv4_hc_pre(31, 4, 17, true));
     test_cases.emplace_back(new test_dsv4_hc_pre(4096, 4, 21, true));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 320, 64, 10240, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_hc_inject(1));
+    test_cases.emplace_back(new test_hc_inject(32));
+    test_cases.emplace_back(new test_hc_inject(37, true));
+    test_cases.emplace_back(new test_hc_up_pre(1));
+    test_cases.emplace_back(new test_hc_up_pre(32));
+    test_cases.emplace_back(new test_hc_up_pre(37));
     for (int64_t n_hc : {1, 2, 3, 5, 8, 65}) {
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17));
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17, true));
@@ -14126,6 +14199,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_dsv4_hc_pre(4096, 4, n_tokens, true)); // synthetic, no gated model uses this width
         test_cases.emplace_back(new test_dsv4_hc_pre(2560, 4, n_tokens, true)); // Qwen4-Exp (Qwen3.8-Flash-Next)
     }
+    // Qwen3.8-Flash-Next gated residual prefill: one ubatch row of the HC chain
+    test_cases.emplace_back(new test_dsv4_hc_pre(2560, 4, 2048, true));
+    test_cases.emplace_back(new test_hc_inject(2048));
+    test_cases.emplace_back(new test_hc_up_pre(2048));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,   320, 2048, 10240, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32,     4, 2048, 10240, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 10240, 2048,   320, {1, 1}, {1, 1}));
 
     // DSV4_HC_POST: n_tokens 1 is decode, 128 and 512 are prompt batches
     for (int64_t n_tokens : {1, 128, 512}) {
