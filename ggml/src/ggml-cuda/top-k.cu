@@ -316,11 +316,12 @@ static void top_k_argsort_cuda(
 #else
             GGML_ABORT("CUB is not available");
 #endif // GGML_CUDA_USE_CUB
+            CUDA_CHECK(cudaMemcpy2DAsync(dst, k * sizeof(int), tmp, ncols * sizeof(int), k * sizeof(int), iter_nrows,
+                                         cudaMemcpyDeviceToDevice, stream));
         } else {
-            argsort_f32_i32_cuda_bitonic(src, tmp, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream);
+            // the bitonic sort writes the first k columns itself
+            argsort_f32_i32_cuda_bitonic(src, dst, ncols, iter_nrows, GGML_SORT_ORDER_DESC, stream, k);
         }
-        CUDA_CHECK(cudaMemcpy2DAsync(dst, k * sizeof(int), tmp, ncols * sizeof(int), k * sizeof(int), iter_nrows,
-                                     cudaMemcpyDeviceToDevice, stream));
 
         src += (size_t) ncols * iter_nrows;
         dst += (size_t) k     * iter_nrows;

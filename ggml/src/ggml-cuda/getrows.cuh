@@ -13,3 +13,9 @@ void get_rows_cuda(
 void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_get_rows_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+// dst = scale_node(the sum of rows rows[0..3] of get_rows) for one token, after writing the CONCAT of k_new and fill
+// into the cache row of set_rows (F16), as FILL, CONCAT, SET_ROWS, GET_ROWS, the ADD chain and SCALE compute it
+void ggml_cuda_op_qsa_kpool_step(ggml_backend_cuda_context & ctx, const ggml_tensor * k_new, const ggml_tensor * fill,
+                                 const ggml_tensor * set_rows, const ggml_tensor * get_rows, const int * rows,
+                                 const ggml_tensor * scale_node, ggml_tensor * dst);

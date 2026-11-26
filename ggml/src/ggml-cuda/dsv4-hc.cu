@@ -116,7 +116,8 @@ static __global__ void dsv4_hc_pre_f32(
         int64_t sw2,
         int64_t sd0,
         int64_t sd1,
-        float   scale) {
+        float   scale,
+        block_q8_1 * q8_1) {
     ggml_cuda_pdl_lc();
     const int64_t ir = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
     const int64_t nr = n_embd * n_tokens;
@@ -142,7 +143,22 @@ static __global__ void dsv4_hc_pre_f32(
         sum += xv * wv;
     }
 
-    dst[i0*sd0 + it*sd1] = scale * sum;
+    const float v = scale * sum;
+    dst[i0*sd0 + it*sd1] = v;
+
+    if (q8_1 != nullptr) {
+        // MMVQ's q8_1 copy as quantize_q8_1 makes it: the 32 lanes of a warp hold one block, all of them active
+        // since n_embd is a multiple of MATRIX_ROW_PADDING
+        float amax = warp_reduce_max<QK8_1>(fabsf(v));
+        const float  d = amax / 127.0f;
+        const int8_t q = amax == 0.0f ? 0 : roundf(v / d);
+        const int  sum_q = warp_reduce_sum<QK8_1>((int) q);
+        block_q8_1 & y = q8_1[ir / QK8_1];
+        y.qs[ir % QK8_1] = q;
+        if (ir % QK8_1 == 0) {
+            y.ds = make_half2(d, d * sum_q);
+        }
+    }
 }
 
 // gated: post = gate_scale_out*sigmoid(gate_scale_in*post), the fused SCALE -> SIGMOID -> SCALE chain of qwen4exp
@@ -270,6 +286,14 @@ void ggml_cuda_op_dsv4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const dim3 grid_dims((nr + block_size - 1) / block_size, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
 
+    // the q8_1 copy for MMVQ (see ggml_cuda_q8_1_cache), one 32-lane warp per q8_1 block
+    block_q8_1 * q8_1 = nullptr;
+    if (ctx.out_q8_1 && ggml_cuda_info().devices[ctx.device].warp_size == QK8_1 && ggml_is_contiguous(dst) &&
+            n_embd % MATRIX_ROW_PADDING == 0) {
+        q8_1 = ctx.out_q8_1;
+        ctx.out_q8_1_written = true;
+    }
+
     auto kernel = gated ? dsv4_hc_pre_f32<true> : dsv4_hc_pre_f32<false>;
     ggml_cuda_kernel_launch(kernel, launch_params,
             (const float *) x->data, (const float *) weights->data, (float *) dst->data,
@@ -277,11 +301,11 @@ void ggml_cuda_op_dsv4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             nbx0 / sizeof(float), nbx1 / sizeof(float), nbx2 / sizeof(float),
             nbw0 / sizeof(float), nbw1 / sizeof(float), nbw2 / sizeof(float),
             nbd0 / sizeof(float), nbd1 / sizeof(float),
-            scale);
+            scale, q8_1);
 }
 
 void ggml_cuda_op_dsv4_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
-        const ggml_tensor * gate_scale_in, const ggml_tensor * gate_scale_out) {
+        const ggml_tensor * gate_scale_in, const ggml_tensor * gate_scale_out, const float * post_data) {
     const ggml_tensor * x        = dst->src[0];
     const ggml_tensor * residual = dst->src[1];
     const ggml_tensor * comb     = dst->src[3];
@@ -322,7 +346,7 @@ void ggml_cuda_op_dsv4_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * ds
                        : (gated ? dsv4_hc_post_f32<false, true> : dsv4_hc_post_f32<false, false>);
     ggml_cuda_kernel_launch(kernel, launch_params,
             (const float *) x->data, (const float *) residual->data,
-            (const float *) post->data, comb ? (const float *) comb->data : nullptr, (float *) dst->data,
+            post_data ? post_data : (const float *) post->data, comb ? (const float *) comb->data : nullptr, (float *) dst->data,
             n_embd, hc, n_tokens,
             nbx0 / sizeof(float), nbx1 / sizeof(float),
             nbr0 / sizeof(float), nbr1 / sizeof(float), nbr2 / sizeof(float),
@@ -331,3 +355,4 @@ void ggml_cuda_op_dsv4_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * ds
             nbd0 / sizeof(float), nbd1 / sizeof(float), nbd2 / sizeof(float),
             gate_in, gate_out);
 }
+

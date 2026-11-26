@@ -490,3 +490,51 @@ void ggml_cuda_op_get_rows_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
 
     k_get_rows_back_float<<<block_nums, block_dims, 0, stream>>>(src0_d, src1_d, dst_d, ne00, ne10, ne1);
 }
+
+// The k-pool update of a QSA indexer for one token, in one block: the new row (k_new, then n_fill copies of
+// fill_value) is written as F16 to row set_idx[0] of the cache, as SET_ROWS does, then the first n_cols values of the
+// cache rows get_idx[rows[0..3]] are summed in that order and scaled, as GET_ROWS, the ADD chain and SCALE do.
+static __global__ void qsa_kpool_step_f16(
+        const float * __restrict__ k_new, const int n_new, const float fill_value, const int n_fill,
+        char * set_base, const void * set_idx, const bool set_idx_i64, const size_t set_nb1,
+        const char * get_base, const void * get_idx, const bool get_idx_i64, const size_t get_nb1, const int n_cols,
+        const int r0, const int r1, const int r2, const int r3, const float scale, const float bias, float * dst) {
+    const int tid = threadIdx.x;
+
+    const int64_t row_new = set_idx_i64 ? ((const int64_t *) set_idx)[0] : ((const int32_t *) set_idx)[0];
+    half * row = (half *) (set_base + row_new*set_nb1);
+    for (int c = tid; c < n_new + n_fill; c += blockDim.x) {
+        row[c] = ggml_cuda_cast<half>(c < n_new ? k_new[c] : fill_value);
+    }
+    __syncthreads();
+
+    const int rows[4] = { r0, r1, r2, r3 };
+    const half * src[4];
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int64_t r = get_idx_i64 ? ((const int64_t *) get_idx)[rows[j]] : ((const int32_t *) get_idx)[rows[j]];
+        src[j] = (const half *) (get_base + r*get_nb1);
+    }
+    for (int c = tid; c < n_cols; c += blockDim.x) {
+        float sum = ggml_cuda_cast<float>(src[0][c]) + ggml_cuda_cast<float>(src[1][c]);
+        sum = sum + ggml_cuda_cast<float>(src[2][c]);
+        sum = sum + ggml_cuda_cast<float>(src[3][c]);
+        dst[c] = scale * sum + bias;
+    }
+}
+
+void ggml_cuda_op_qsa_kpool_step(ggml_backend_cuda_context & ctx, const ggml_tensor * k_new, const ggml_tensor * fill,
+                                 const ggml_tensor * set_rows, const ggml_tensor * get_rows, const int * rows,
+                                 const ggml_tensor * scale_node, ggml_tensor * dst) {
+    float scale;
+    float bias;
+    memcpy(&scale, (const float *) scale_node->op_params + 0, sizeof(float));
+    memcpy(&bias,  (const float *) scale_node->op_params + 1, sizeof(float));
+    const ggml_tensor * set_idx = set_rows->src[1];
+    const ggml_tensor * get_idx = get_rows->src[1];
+    qsa_kpool_step_f16<<<1, 128, 0, ctx.stream()>>>(
+        (const float *) k_new->data, k_new->ne[0], ggml_get_op_params_f32(fill, 0), fill->ne[0],
+        (char *) set_rows->data, set_idx->data, set_idx->type == GGML_TYPE_I64, set_rows->nb[1],
+        (const char *) get_rows->src[0]->data, get_idx->data, get_idx->type == GGML_TYPE_I64, get_rows->src[0]->nb[1],
+        get_rows->ne[0], rows[0], rows[1], rows[2], rows[3], scale, bias, (float *) dst->data);
+}

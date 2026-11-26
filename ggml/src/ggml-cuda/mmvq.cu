@@ -1677,3 +1677,702 @@ void ggml_cuda_op_mul_mat_vec_q(
 
     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_ncols, src1_padded_row_size);
 }
+
+// The hyper-connection pre-mix of qwen4exp fused with the MMVQ product that makes its gate, for one token: warp w of
+// block b computes the hc gate rows of position i = 32*b + w, each as mul_mat_vec_q does with one warp per row and
+// block (the RDNA3.5 parameters), then dst[i] = scale * sum_s x[i, s] * sigmoid(gate[s*n_embd + i]) as dsv4_hc_pre_f32
+// does. The 32 positions of a block make one block of MMVQ's q8_1 copy of dst.
+// With quantize_y the warps of the block first quantize y_f32 (ne10 values, at most 32 blocks) to q8_1 in shared memory
+// as quantize_q8_1 does.
+template <ggml_type type, bool quantize_y>
+__launch_bounds__(QK8_1*QK8_1, 1)
+static __global__ void mul_mat_vec_q_hc_pre(
+        const void * __restrict__ vx, const block_q8_1 * __restrict__ y, const float * __restrict__ y_f32,
+        const float * __restrict__ x, float * __restrict__ dst, block_q8_1 * __restrict__ q8_1, const int ncols_x,
+        const int ne10, const int stride_row_x, const int n_embd, const int hc, const float scale,
+        const float * __restrict__ inj_w, const float * __restrict__ inj_x, float * __restrict__ inj_dst, const int inj_ncols2,
+        const int inj_stride_row) {
+    constexpr int qk              = ggml_cuda_type_traits<type>::qk;
+    constexpr int qi              = ggml_cuda_type_traits<type>::qi;
+    constexpr int vdr             = get_vdr_mmvq(type);
+    constexpr int warp_size       = QK8_1;
+    constexpr int blocks_per_iter = vdr * warp_size / qi;
+    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
+
+    // the injection product goes first, block 0, as its rows take longer than a block of positions
+    const int b                = inj_dst != nullptr ? (int) blockIdx.x - 1 : (int) blockIdx.x;
+    const int tid              = threadIdx.x;
+    const int i                = b*warp_size + threadIdx.y;
+    const int blocks_per_row_x = ncols_x / qk;
+
+    if (b < 0) {
+        // the extra block: the hc rows of the injection product, each by 8 warps as mul_mat_vec_f sums a row with 256
+        // threads (F32 weights)
+        constexpr int inj_block_size = 256;
+        const int r  = threadIdx.y / (inj_block_size/warp_size);
+        const int iw = threadIdx.y % (inj_block_size/warp_size);
+        __shared__ float buf_iw[warp_size][warp_size];
+        buf_iw[threadIdx.y][tid] = 0.0f;
+        __syncthreads();
+        float sumf = 0.0f;
+        if (r < hc) {
+            const float2 * x2 = (const float2 *) (inj_w + (int64_t) r*inj_stride_row);
+            const float2 * y2 = (const float2 *) inj_x;
+            for (int col2 = iw*warp_size + tid; col2 < inj_ncols2; col2 += inj_block_size) {
+                const float2 tmpx = x2[col2];
+                const float2 tmpy = y2[col2];
+                ggml_cuda_mad(sumf, tmpx.x, tmpy.x);
+                ggml_cuda_mad(sumf, tmpx.y, tmpy.y);
+            }
+        }
+        sumf = warp_reduce_sum<warp_size>(sumf);
+        buf_iw[r][iw] = sumf;
+        __syncthreads();
+        if (iw == 0 && r < hc) {
+            sumf = buf_iw[r][tid];
+            sumf = warp_reduce_sum<warp_size>(sumf);
+            if (tid == 0) {
+                inj_dst[r] = sumf;
+            }
+        }
+        return;
+    }
+
+    __shared__ block_q8_1 y_shared[quantize_y ? warp_size : 1];
+    if constexpr (quantize_y) {
+        if (threadIdx.y < ncols_x / QK8_1) {
+            const int   k     = threadIdx.y*QK8_1 + tid;
+            const float xi    = k < ne10 ? y_f32[k] : 0.0f;
+            const float amax  = warp_reduce_max<QK8_1>(fabsf(xi));
+            const float d     = amax / 127.0f;
+            const int8_t q    = amax == 0.0f ? 0 : roundf(xi / d);
+            const int   sum_q = warp_reduce_sum<QK8_1>((int) q);
+            y_shared[threadIdx.y].qs[tid] = q;
+            if (tid == 0) {
+                y_shared[threadIdx.y].ds = make_half2(d, d * sum_q);
+            }
+        }
+        __syncthreads();
+    }
+    // not through y, whose restrict lets the compiler move its loads before the barrier
+    const block_q8_1 * y_row = quantize_y ? y_shared : y;
+
+    float sum = 0.0f;
+    for (int ih = 0; ih < hc; ++ih) {
+        const int row = ih*n_embd + i;
+        float gate = 0.0f;
+        for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+            const int kby = kbx * (qk/QK8_1);
+            const int kqs = vdr * (tid % (qi/vdr));
+            gate += vec_dot_q_cuda(vx, &y_row[kby], row*stride_row_x + kbx, kqs);
+        }
+        gate = warp_reduce_sum<warp_size>(gate);
+
+        const float xv = x[ih*n_embd + i];
+        const float wv = 1.0f / (1.0f + expf(-gate));
+        sum += xv * wv;
+    }
+
+    const float v = scale * sum;
+    __shared__ float v_shared[warp_size];
+    if (tid == 0) {
+        dst[i] = v;
+        v_shared[threadIdx.y] = v;
+    }
+    if (q8_1 == nullptr) {
+        return;
+    }
+    __syncthreads();
+    if (threadIdx.y != 0) {
+        return;
+    }
+
+    const float  vq    = v_shared[tid];
+    const float  amax  = warp_reduce_max<QK8_1>(fabsf(vq));
+    const float  d     = amax / 127.0f;
+    const int8_t q     = amax == 0.0f ? 0 : roundf(vq / d);
+    const int    sum_q = warp_reduce_sum<QK8_1>((int) q);
+    block_q8_1 & yb = q8_1[b];
+    yb.qs[tid] = q;
+    if (tid == 0) {
+        yb.ds = make_half2(d, d * sum_q);
+    }
+}
+
+// the q8_1 copy of src1 (one row) as ggml_cuda_mul_mat_vec_q makes it once per graph evaluation, see ggml_cuda_q8_1_cache
+static const char * ggml_cuda_mmvq_src1_q8_1(ggml_backend_cuda_context & ctx, const ggml_tensor * src1,
+                                             ggml_cuda_pool_alloc<char> & pool) {
+    const char * src1_q8_1 = ctx.q8_1_cache.find(src1);
+    if (src1_q8_1 != nullptr) {
+        return src1_q8_1;
+    }
+    const int64_t ne10             = src1->ne[0];
+    const int64_t ne10_padded      = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+    const size_t  nbytes_src1_q8_1 = ne10_padded * sizeof(block_q8_1)/QK8_1;
+    char * buf = ctx.q8_1_cache.reserve(nbytes_src1_q8_1);
+    const bool cached = buf != nullptr;
+    if (!cached) {
+        buf = pool.alloc(nbytes_src1_q8_1);
+    }
+    const int64_t s11 = src1->nb[1] / sizeof(float);
+    const int64_t s12 = src1->nb[2] / sizeof(float);
+    const int64_t s13 = src1->nb[3] / sizeof(float);
+    quantize_row_q8_1_cuda((const float *) src1->data, buf, ne10, s11, s12, s13, ne10_padded, 1, 1, 1, ctx.stream());
+    if (cached) {
+        ctx.q8_1_cache.commit(src1);
+    }
+    return buf;
+}
+
+// silu(s*(row . y) + b), the MMVQ product for one token followed by SCALE -> SILU, each row summed as mul_mat_vec_q does
+// with one warp per row and block (the RDNA3.5 parameters for one column)
+template <ggml_type type>
+__launch_bounds__(QK8_1, 1)
+static __global__ void mul_mat_vec_q_scale_silu(
+        const void * __restrict__ vx, const block_q8_1 * __restrict__ y, float * __restrict__ dst,
+        float * __restrict__ dst_copy, const int ncols_x, const int stride_row_x, const float s, const float b) {
+    constexpr int qk              = ggml_cuda_type_traits<type>::qk;
+    constexpr int qi              = ggml_cuda_type_traits<type>::qi;
+    constexpr int vdr             = get_vdr_mmvq(type);
+    constexpr int warp_size       = QK8_1;
+    constexpr int blocks_per_iter = vdr * warp_size / qi;
+    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
+
+    const int tid              = threadIdx.x;
+    const int row              = blockIdx.x;
+    const int blocks_per_row_x = ncols_x / qk;
+
+    float tmp = 0.0f;
+    for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+        const int kby = kbx * (qk/QK8_1);
+        const int kqs = vdr * (tid % (qi/vdr));
+        tmp += vec_dot_q_cuda(vx, &y[kby], row*stride_row_x + kbx, kqs);
+    }
+    tmp = warp_reduce_sum<warp_size>(tmp);
+
+    if (tid == 0) {
+        const float v = ggml_cuda_op_silu_single(s * tmp + b);
+        dst[row] = v;
+        if (dst_copy != nullptr) {
+            dst_copy[row] = v;
+        }
+    }
+}
+
+void ggml_cuda_mul_mat_vec_q_scale_silu(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                        const ggml_tensor * scale_node, ggml_tensor * unary_node, float * dst_copy) {
+    ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    const char * src1_q8_1 = ggml_cuda_mmvq_src1_q8_1(ctx, src1, src1_q8_1_pool);
+
+    float s;
+    float b;
+    memcpy(&s, (const float *) scale_node->op_params + 0, sizeof(float));
+    memcpy(&b, (const float *) scale_node->op_params + 1, sizeof(float));
+
+    ctx.q8_1_cache.invalidate(unary_node);
+    switch (src0->type) {
+        case GGML_TYPE_Q8_0:
+            mul_mat_vec_q_scale_silu<GGML_TYPE_Q8_0><<<src0->ne[1], QK8_1, 0, ctx.stream()>>>(
+                src0->data, (const block_q8_1 *) src1_q8_1, (float *) unary_node->data, dst_copy, src0->ne[0],
+                src0->nb[1] / ggml_type_size(src0->type), s, b);
+            break;
+        default:
+            GGML_ABORT("unsupported type for the fused MMVQ + scale + silu");
+    }
+}
+
+void ggml_cuda_mul_mat_vec_q_hc_pre(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                    const float * src1_copy, ggml_tensor * hc_pre, const bool write_q8_1,
+                                    const ggml_tensor * inject, float * inject_dst) {
+    const ggml_tensor * x = hc_pre->src[0];
+    cudaStream_t stream = ctx.stream();
+
+    // A short src1 without a q8_1 copy is quantized in the kernel, from src1_copy: the output may overlap src1, whose
+    // last reader the fused product is, and the blocks that finish first would overwrite it for the later ones.
+    ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    const char * src1_q8_1  = ctx.q8_1_cache.find(src1);
+    const bool   quantize_y = src1_q8_1 == nullptr && src1_copy != nullptr && src1->ne[0] <= QK8_1*QK8_1 &&
+        src0->ne[0] <= QK8_1*QK8_1;
+    if (src1_q8_1 == nullptr && !quantize_y) {
+        src1_q8_1 = ggml_cuda_mmvq_src1_q8_1(ctx, src1, src1_q8_1_pool);
+    }
+
+    const int64_t n_embd = x->ne[0];
+    const int     hc     = x->ne[1];
+    const float   scale  = ggml_get_op_params_f32(hc_pre, 0);
+
+    ctx.q8_1_cache.invalidate(hc_pre);
+    block_q8_1 * q8_1 = write_q8_1 ? (block_q8_1 *) ctx.q8_1_cache.reserve(n_embd/QK8_1 * sizeof(block_q8_1)) : nullptr;
+
+    // with the injection product, one more block (the first) computes it, see mul_mat_vec_q_hc_pre
+    const float * inj_w          = inject_dst ? (const float *) inject->src[0]->data : nullptr;
+    const float * inj_x          = inject_dst ? (const float *) inject->src[1]->data : nullptr;
+    const int     inj_ncols2     = inject_dst ? inject->src[0]->ne[0] / 2 : 0;
+    const int     inj_stride_row = inject_dst ? inject->src[0]->nb[1] / sizeof(float) : 0;
+
+    const dim3 grid_dims(n_embd/QK8_1 + (inject_dst ? 1 : 0), 1, 1);
+    const dim3 block_dims(QK8_1, QK8_1, 1);
+    switch (src0->type) {
+        case GGML_TYPE_Q8_0:
+            if (quantize_y) {
+                mul_mat_vec_q_hc_pre<GGML_TYPE_Q8_0, true><<<grid_dims, block_dims, 0, stream>>>(
+                    src0->data, nullptr, src1_copy, (const float *) x->data, (float *) hc_pre->data, q8_1,
+                    src0->ne[0], src1->ne[0], src0->nb[1] / ggml_type_size(src0->type), n_embd, hc, scale,
+                    inj_w, inj_x, inject_dst, inj_ncols2, inj_stride_row);
+            } else {
+                mul_mat_vec_q_hc_pre<GGML_TYPE_Q8_0, false><<<grid_dims, block_dims, 0, stream>>>(
+                    src0->data, (const block_q8_1 *) src1_q8_1, nullptr, (const float *) x->data, (float *) hc_pre->data,
+                    q8_1, src0->ne[0], src1->ne[0], src0->nb[1] / ggml_type_size(src0->type), n_embd, hc, scale,
+                    inj_w, inj_x, inject_dst, inj_ncols2, inj_stride_row);
+            }
+            break;
+        default:
+            GGML_ABORT("unsupported type for the fused hyper-connection pre-mix");
+    }
+
+    if (q8_1) {
+        ctx.q8_1_cache.commit(hc_pre);
+    }
+}
+
+bool ggml_cuda_mmvq_moe_glu_shared_supported(ggml_type type, ggml_type type_s) {
+    return type_s == GGML_TYPE_Q6_K && (type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ2_S);
+}
+
+// up . y and gate . y for one row with the GLU, as mul_mat_vec_q computes them with one warp per row and block
+template <ggml_type type>
+static __device__ __forceinline__ float mmvq_moe_glu_row(
+        const void * __restrict__ vup, const void * __restrict__ vgate, const block_q8_1 * __restrict__ y,
+        const int kbx_offset, const int ncols_x, const ggml_glu_op glu_op, const float glu_limit) {
+    constexpr int qk              = ggml_cuda_type_traits<type>::qk;
+    constexpr int qi              = ggml_cuda_type_traits<type>::qi;
+    constexpr int vdr             = get_vdr_mmvq(type);
+    constexpr int warp_size       = QK8_1;
+    constexpr int blocks_per_iter = vdr * warp_size / qi;
+    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
+
+    const int tid              = threadIdx.x;
+    const int blocks_per_row_x = ncols_x / qk;
+
+    float tmp      = 0.0f;
+    float tmp_gate = 0.0f;
+    for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+        const int kby = kbx * (qk/QK8_1);
+        const int kqs = vdr * (tid % (qi/vdr));
+        tmp      += vec_dot_q_cuda(vup,   &y[kby], kbx_offset + kbx, kqs);
+        tmp_gate += vec_dot_q_cuda(vgate, &y[kby], kbx_offset + kbx, kqs);
+    }
+    tmp      = warp_reduce_sum<warp_size>(tmp);
+    tmp_gate = warp_reduce_sum<warp_size>(tmp_gate);
+
+    // the zero biases mul_mat_vec_q adds with the fusion
+    float result     = tmp + 0.0f;
+    float gate_value = tmp_gate + 0.0f;
+    switch (glu_op) {
+        case GGML_GLU_OP_SWIGLU:
+            result *= ggml_cuda_op_silu_single(gate_value);
+            break;
+        case GGML_GLU_OP_GEGLU:
+            result *= ggml_cuda_op_gelu_single(gate_value);
+            break;
+        case GGML_GLU_OP_SWIGLU_OAI:
+            result = ggml_cuda_op_swiglu_oai_single(gate_value, result);
+            break;
+        case GGML_GLU_OP_SWIGLU_CLAMP:
+            result = ggml_cuda_op_swiglu_clamp_single(gate_value, result, glu_limit);
+            break;
+        default:
+            result = result * gate_value;
+            break;
+    }
+    return result;
+}
+
+// The routed experts' gate and up products with the GLU for one token and, in the first nblocks blocks (so that they
+// overlap with the routed ones), those of the shared expert, whose weights may have another type. Warp w of block
+// e*nblocks + b computes row 32*b + w of expert e - 1 (e = 0: the shared expert, see mmvq_moe_glu_row).
+// The 32 rows of a block make one block of MMVQ's q8_1 copy of the result, whose rows are padded to nblocks_padded
+// blocks: the blocks past the rows are zero, as quantize_q8_1 makes them, and written by the blocks with rows.
+template <ggml_type type, ggml_type type_s>
+__launch_bounds__(QK8_1*QK8_1, 1)
+static __global__ void mul_mat_vec_q_moe_glu_shared(
+        const void * __restrict__ up, const void * __restrict__ gate, const void * __restrict__ up_s,
+        const void * __restrict__ gate_s, const block_q8_1 * __restrict__ y, const int32_t * __restrict__ ids,
+        float * __restrict__ dst, float * __restrict__ dst_s, block_q8_1 * __restrict__ q8_1,
+        block_q8_1 * __restrict__ q8_1_s, const int ncols_x, const int nrows, const int stride_row_x,
+        const int stride_channel_x, const int stride_channel_dst, const int stride_row_x_s, const int nblocks,
+        const int nblocks_padded, const ggml_glu_op glu_op, const float glu_limit, const float * __restrict__ sg_w, const float * __restrict__ sg_x,
+        const int sg_ncols2, const float * __restrict__ weights, float * __restrict__ scratch, const int n_used) {
+    if (scratch != nullptr && blockIdx.x == gridDim.x - 1) {
+        // the extra last block: the shared expert's gate (F32 weights), with 8 warps as mul_mat_vec_f sums a row with
+        // 256 threads, and copies of the routing for the fused down stage (see ggml_cuda_mul_mat_vec_q_moe_down_shared),
+        // whose output may overlap the routing tensors
+        constexpr int sg_block_size = 256;
+        const int tid = threadIdx.x;
+        const int iw  = threadIdx.y;
+        __shared__ float buf_iw[QK8_1];
+        if (iw == 0) {
+            buf_iw[tid] = 0.0f;
+        }
+        __syncthreads();
+        float sumf = 0.0f;
+        if (iw < sg_block_size/QK8_1) {
+            const float2 * x2 = (const float2 *) sg_w;
+            const float2 * y2 = (const float2 *) sg_x;
+            for (int col2 = iw*QK8_1 + tid; col2 < sg_ncols2; col2 += sg_block_size) {
+                const float2 tmpx = x2[col2];
+                const float2 tmpy = y2[col2];
+                ggml_cuda_mad(sumf, tmpx.x, tmpy.x);
+                ggml_cuda_mad(sumf, tmpx.y, tmpy.y);
+            }
+        }
+        sumf = warp_reduce_sum<QK8_1>(sumf);
+        if (iw < sg_block_size/QK8_1) {
+            buf_iw[iw] = sumf;
+        }
+        __syncthreads();
+        if (iw == 0) {
+            sumf = buf_iw[tid];
+            sumf = warp_reduce_sum<QK8_1>(sumf);
+            if (tid == 0) {
+                scratch[0] = sumf;
+            }
+        } else if (iw == 1 && tid < n_used) {
+            scratch[1 + tid] = weights[tid];
+            ((int *) scratch)[QK8_1 + tid] = ids[tid];
+        }
+        return;
+    }
+
+    const int  b      = blockIdx.x % nblocks;
+    const bool shared = blockIdx.x < nblocks;
+    const int  e      = (int) (blockIdx.x / nblocks) - 1;
+    const int  row    = b*QK8_1 + threadIdx.y;
+
+    float v = 0.0f;
+    if (row < nrows) {
+        if (shared) {
+            v = mmvq_moe_glu_row<type_s>(up_s, gate_s, y, row*stride_row_x_s, ncols_x, glu_op, glu_limit);
+        } else {
+            v = mmvq_moe_glu_row<type>(up, gate, y, ids[e]*stride_channel_x + row*stride_row_x, ncols_x, glu_op, glu_limit);
+        }
+        if (threadIdx.x == 0) {
+            if (shared) {
+                dst_s[row] = v;
+            } else {
+                dst[e*stride_channel_dst + row] = v;
+            }
+        }
+    }
+
+    block_q8_1 * q = shared ? q8_1_s : (q8_1 ? q8_1 + e*nblocks_padded : nullptr);
+    if (q == nullptr) {
+        return;
+    }
+    __shared__ float v_shared[QK8_1];
+    if (threadIdx.x == 0) {
+        v_shared[threadIdx.y] = v;
+    }
+    __syncthreads();
+    if (threadIdx.y != 0) {
+        return;
+    }
+    const int    tid   = threadIdx.x;
+    const float  vq    = v_shared[tid];
+    const float  amax  = warp_reduce_max<QK8_1>(fabsf(vq));
+    const float  d     = amax / 127.0f;
+    const int8_t qv    = amax == 0.0f ? 0 : roundf(vq / d);
+    const int    sum_q = warp_reduce_sum<QK8_1>((int) qv);
+    block_q8_1 & yb = q[b];
+    yb.qs[tid] = qv;
+    if (tid == 0) {
+        yb.ds = make_half2(d, d * sum_q);
+    }
+    for (int bp = nblocks + b; bp < nblocks_padded; bp += nblocks) {
+        q[bp].qs[tid] = 0;
+        if (tid == 0) {
+            q[bp].ds = make_half2(0.0f, 0.0f);
+        }
+    }
+}
+
+void ggml_cuda_mul_mat_vec_q_moe_glu_shared(ggml_backend_cuda_context & ctx, const ggml_tensor * routed,
+                                            const ggml_tensor * shared, const bool write_q8_1, const bool write_q8_1_s,
+                                            const ggml_tensor * shared_gate, const ggml_tensor * weights, float * scratch) {
+    const ggml_tensor * gate_w   = routed->src[0]->src[0];
+    const ggml_tensor * up_mm    = routed->src[1];
+    const ggml_tensor * up_w     = up_mm->src[0];
+    const ggml_tensor * src1     = up_mm->src[1];
+    const ggml_tensor * ids      = up_mm->src[2];
+    const ggml_tensor * gate_w_s = shared->src[0]->src[0];
+    const ggml_tensor * up_w_s   = shared->src[1]->src[0];
+
+    ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    const char * src1_q8_1 = ggml_cuda_mmvq_src1_q8_1(ctx, src1, src1_q8_1_pool);
+
+    const int ncols_x        = up_w->ne[0];
+    const int nrows          = up_w->ne[1];
+    const int n_used         = routed->ne[1];
+    const int nblocks        = (nrows + QK8_1 - 1) / QK8_1;
+    const int nblocks_padded = GGML_PAD(nrows, MATRIX_ROW_PADDING) / QK8_1;
+
+    // the q8_1 copies MMVQ reads for the down products, rows padded to MATRIX_ROW_PADDING (see ggml_cuda_q8_1_cache)
+    ctx.q8_1_cache.invalidate(routed);
+    ctx.q8_1_cache.invalidate(shared);
+    block_q8_1 * q8_1 = nullptr;
+    if (write_q8_1) {
+        q8_1 = (block_q8_1 *) ctx.q8_1_cache.reserve(n_used * nblocks_padded * sizeof(block_q8_1));
+        if (q8_1) {
+            ctx.q8_1_cache.commit(routed);
+        }
+    }
+    block_q8_1 * q8_1_s = nullptr;
+    if (write_q8_1_s) {
+        q8_1_s = (block_q8_1 *) ctx.q8_1_cache.reserve(nblocks_padded * sizeof(block_q8_1));
+        if (q8_1_s) {
+            ctx.q8_1_cache.commit(shared);
+        }
+    }
+
+    const ggml_glu_op glu_op    = ggml_get_glu_op(routed);
+    const float       glu_limit = ggml_get_op_params_f32(routed, 3);
+
+    // with scratch, one more block computes the shared expert's gate and copies the routing there
+    const float * sg_w      = scratch ? (const float *) shared_gate->src[0]->data : nullptr;
+    const float * sg_x      = scratch ? (const float *) shared_gate->src[1]->data : nullptr;
+    const int     sg_ncols2 = scratch ? shared_gate->src[0]->ne[0] / 2 : 0;
+
+    const dim3 grid_dims(nblocks*(n_used + 1) + (scratch ? 1 : 0), 1, 1);
+    const dim3 block_dims(QK8_1, QK8_1, 1);
+#define MMVQ_MOE_GLU_SHARED_CASE(T, TS) \
+    if (up_w->type == T && up_w_s->type == TS) { \
+        mul_mat_vec_q_moe_glu_shared<T, TS><<<grid_dims, block_dims, 0, ctx.stream()>>>( \
+            up_w->data, gate_w->data, up_w_s->data, gate_w_s->data, (const block_q8_1 *) src1_q8_1, \
+            (const int32_t *) ids->data, (float *) routed->data, (float *) shared->data, q8_1, q8_1_s, ncols_x, nrows, \
+            up_w->nb[1] / ggml_type_size(T), up_w->nb[2] / ggml_type_size(T), routed->nb[1] / sizeof(float), \
+            up_w_s->nb[1] / ggml_type_size(TS), nblocks, nblocks_padded, glu_op, glu_limit, sg_w, sg_x, sg_ncols2, \
+            scratch ? (const float *) weights->data : nullptr, scratch, n_used); \
+        return; \
+    }
+    MMVQ_MOE_GLU_SHARED_CASE(GGML_TYPE_IQ3_XXS, GGML_TYPE_Q6_K)
+    MMVQ_MOE_GLU_SHARED_CASE(GGML_TYPE_IQ4_XS,  GGML_TYPE_Q6_K)
+    MMVQ_MOE_GLU_SHARED_CASE(GGML_TYPE_IQ2_S,   GGML_TYPE_Q6_K)
+#undef MMVQ_MOE_GLU_SHARED_CASE
+    GGML_ABORT("unsupported types for the fused routed + shared expert gate/up");
+}
+
+bool ggml_cuda_mmvq_moe_down_shared_supported(ggml_type type, ggml_type type_s) {
+    return type_s == GGML_TYPE_Q8_0 && (type == GGML_TYPE_Q5_0 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q8_0 ||
+        type == GGML_TYPE_Q4_0);
+}
+
+// row . y for one row, as mul_mat_vec_q computes it with one warp per row and block
+template <ggml_type type>
+static __device__ __forceinline__ float mmvq_dot_row(
+        const void * __restrict__ vx, const block_q8_1 * __restrict__ y, const int kbx_offset, const int ncols_x) {
+    constexpr int qk              = ggml_cuda_type_traits<type>::qk;
+    constexpr int qi              = ggml_cuda_type_traits<type>::qi;
+    constexpr int vdr             = get_vdr_mmvq(type);
+    constexpr int warp_size       = QK8_1;
+    constexpr int blocks_per_iter = vdr * warp_size / qi;
+    constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
+
+    const int tid              = threadIdx.x;
+    const int blocks_per_row_x = ncols_x / qk;
+
+    float tmp = 0.0f;
+    for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+        const int kby = kbx * (qk/QK8_1);
+        const int kqs = vdr * (tid % (qi/vdr));
+        tmp += vec_dot_q_cuda(vx, &y[kby], kbx_offset + kbx, kqs);
+    }
+    return warp_reduce_sum<warp_size>(tmp);
+}
+
+bool ggml_cuda_mmvq_norm_gate_supported(ggml_type type) {
+    return type == GGML_TYPE_Q6_K || type == GGML_TYPE_Q8_0;
+}
+
+// as op_sigmoid in unary.cu
+static __device__ __forceinline__ float mmvq_norm_gate_sigmoid(const float x) {
+    return 1.0f / (1.0f + expf(-x));
+}
+
+// dst = sigmoid(x . y) * (the RMS norm of the row of 128 values of nx holding each row, times nw), the MMVQ product for
+// one token (one warp per row, see mmvq_dot_row) followed by the gated output norm of a gated delta net as
+// rms_norm_f32<32, 1, true, true> and unary_gated_op_q8_1_kernel compute it, with MMVQ's q8_1 copy of dst: the 32 rows
+// of a block make one of its blocks.
+template <ggml_type type>
+__launch_bounds__(QK8_1*QK8_1, 1)
+static __global__ void mul_mat_vec_q_norm_gate(
+        const void * __restrict__ vx, const block_q8_1 * __restrict__ y, const float * __restrict__ nx,
+        const float * __restrict__ nw, float * __restrict__ dst, block_q8_1 * __restrict__ q8_1, const int ncols_x,
+        const int stride_row_x, const float eps) {
+    constexpr int ncols_norm = 128;
+    const int tid = threadIdx.x;
+    const int row = blockIdx.x*QK8_1 + threadIdx.y;
+
+    const float z = mmvq_dot_row<type>(vx, y, row*stride_row_x, ncols_x);
+
+    const int    h  = row / ncols_norm;
+    const float4 xs = ((const float4 *) (nx + h*ncols_norm))[tid];
+    float tmp = 0.0f;
+    tmp += xs.x*xs.x + xs.y*xs.y + xs.z*xs.z + xs.w*xs.w;
+    tmp = warp_reduce_sum(tmp);
+    const float scale = rsqrtf(tmp / ncols_norm + eps);
+
+    __shared__ float v_shared[QK8_1];
+    if (tid == 0) {
+        const int c = row % ncols_norm;
+        float n = scale*nx[h*ncols_norm + c];
+        n *= nw[c];
+        const float v = mmvq_norm_gate_sigmoid(z) * n;
+        dst[row] = v;
+        v_shared[threadIdx.y] = v;
+    }
+    __syncthreads();
+    if (threadIdx.y != 0) {
+        return;
+    }
+    const float  v     = v_shared[tid];
+    const float  amax  = warp_reduce_max<QK8_1>(fabsf(v));
+    const float  d     = amax / 127.0f;
+    const int8_t q     = amax == 0.0f ? 0 : roundf(v / d);
+    const int    sum_q = warp_reduce_sum<QK8_1>((int) q);
+    block_q8_1 & yb = q8_1[blockIdx.x];
+    yb.qs[tid] = q;
+    if (tid == 0) {
+        yb.ds = make_half2(d, d * sum_q);
+    }
+}
+
+void ggml_cuda_mul_mat_vec_q_norm_gate(ggml_backend_cuda_context & ctx, const ggml_tensor * mm, const ggml_tensor * rms,
+                                       const ggml_tensor * norm_w, ggml_tensor * dst, const ggml_tensor * q8_1_tensor) {
+    const ggml_tensor * src0 = mm->src[0];
+    const ggml_tensor * src1 = mm->src[1];
+
+    ggml_cuda_pool_alloc<char> src1_q8_1_pool(ctx.pool());
+    const char * src1_q8_1 = ggml_cuda_mmvq_src1_q8_1(ctx, src1, src1_q8_1_pool);
+
+    // the q8_1 copy MMVQ reads through q8_1_tensor, or one nothing reads if the cache has no room
+    const size_t nbytes_q8_1 = ggml_nrows(q8_1_tensor) * q8_1_tensor->ne[0]/QK8_1 * sizeof(block_q8_1);
+    ctx.q8_1_cache.invalidate(dst);
+    ctx.q8_1_cache.invalidate(q8_1_tensor);
+    ggml_cuda_pool_alloc<char> q8_1_pool(ctx.pool());
+    block_q8_1 * q8_1 = (block_q8_1 *) ctx.q8_1_cache.reserve(nbytes_q8_1);
+    const bool cached = q8_1 != nullptr;
+    if (!cached) {
+        q8_1 = (block_q8_1 *) q8_1_pool.alloc(nbytes_q8_1);
+    }
+
+    float eps = 0.0f;
+    memcpy(&eps, rms->op_params, sizeof(float));
+
+    const int  nrows = src0->ne[1];
+    const dim3 grid_dims(nrows / QK8_1, 1, 1);
+    const dim3 block_dims(QK8_1, QK8_1, 1);
+    switch (src0->type) {
+        case GGML_TYPE_Q6_K:
+            mul_mat_vec_q_norm_gate<GGML_TYPE_Q6_K><<<grid_dims, block_dims, 0, ctx.stream()>>>(
+                src0->data, (const block_q8_1 *) src1_q8_1, (const float *) rms->src[0]->data, (const float *) norm_w->data,
+                (float *) dst->data, q8_1, src0->ne[0], src0->nb[1] / ggml_type_size(GGML_TYPE_Q6_K), eps);
+            break;
+        case GGML_TYPE_Q8_0:
+            mul_mat_vec_q_norm_gate<GGML_TYPE_Q8_0><<<grid_dims, block_dims, 0, ctx.stream()>>>(
+                src0->data, (const block_q8_1 *) src1_q8_1, (const float *) rms->src[0]->data, (const float *) norm_w->data,
+                (float *) dst->data, q8_1, src0->ne[0], src0->nb[1] / ggml_type_size(GGML_TYPE_Q8_0), eps);
+            break;
+        default:
+            GGML_ABORT("unsupported type for the fused gated norm");
+    }
+    if (cached) {
+        ctx.q8_1_cache.commit(q8_1_tensor);
+    }
+}
+
+// the weighted sum of the experts' rows as moe_weighted_reduction_f32 computes it
+static __device__ __forceinline__ float moe_weighted_sum(
+        const float * experts, const float * expert_scale, const float * weights, const int n_expert_used) {
+    const float first_scale = expert_scale != nullptr ? expert_scale[0] : 1.0f;
+    float       sum         = (experts[0] * first_scale) * weights[0];
+    for (int expert = 1; expert < n_expert_used; ++expert) {
+        const float scale = expert_scale != nullptr ? expert_scale[expert] : 1.0f;
+        sum += (experts[expert] * scale) * weights[expert];
+    }
+    return sum;
+}
+
+static __device__ __forceinline__ float moe_shared_gate_sigmoid(const float x) {
+    return 1.0f / (1.0f + expf(-x));
+}
+
+// a + x*sigmoid(g) as unary_mul_add_kernel computes it, the product rounded before the sum
+static __device__ __forceinline__ float moe_shared_gated_add(const float a, const float x, const float g) {
+#ifdef GGML_USE_HIP
+#pragma clang fp contract(off)
+    const float m = x * moe_shared_gate_sigmoid(g);
+    return a + m;
+#else
+    return __fadd_rn(a, __fmul_rn(x, moe_shared_gate_sigmoid(g)));
+#endif // GGML_USE_HIP
+}
+
+// The down stage of the routed experts and the shared expert for one token: block r computes row r, warp e < n_used
+// that of routed expert ids[e] and warp n_used that of the shared expert, then dst[r] = the routing-weighted sum of the
+// routed rows + shared row*sigmoid(gate). The routing and the gate come from scratch, see mul_mat_vec_q_moe_glu_shared.
+template <ggml_type type, ggml_type type_s>
+__launch_bounds__(QK8_1*QK8_1, 1)
+static __global__ void mul_mat_vec_q_moe_down_shared(
+        const void * __restrict__ down, const void * __restrict__ down_s, const block_q8_1 * __restrict__ y,
+        const block_q8_1 * __restrict__ y_s, const float * __restrict__ scratch, const float * __restrict__ expert_scale,
+        float * __restrict__ dst, const int ncols_x, const int stride_row_x, const int stride_channel_x,
+        const int stride_row_x_s, const int stride_channel_y, const int n_used) {
+    const int row = blockIdx.x;
+    const int w   = threadIdx.y;
+
+    float v;
+    if (w < n_used) {
+        const int e = ((const int *) scratch)[QK8_1 + w];
+        v = mmvq_dot_row<type>(down, y + w*stride_channel_y, e*stride_channel_x + row*stride_row_x, ncols_x);
+    } else {
+        v = mmvq_dot_row<type_s>(down_s, y_s, row*stride_row_x_s, ncols_x);
+    }
+
+    __shared__ float rows[QK8_1];
+    if (threadIdx.x == 0) {
+        rows[w] = v;
+    }
+    __syncthreads();
+    if (w == 0 && threadIdx.x == 0) {
+        const float sum = moe_weighted_sum(rows, expert_scale, scratch + 1, n_used);
+        dst[row] = moe_shared_gated_add(sum, rows[n_used], scratch[0]);
+    }
+}
+
+void ggml_cuda_mul_mat_vec_q_moe_down_shared(ggml_backend_cuda_context & ctx, const ggml_tensor * down,
+                                             const ggml_tensor * shared_down, ggml_tensor * dst, const float * scratch,
+                                             const char * y_q8_1, const char * y_s_q8_1) {
+    const ggml_tensor * w   = down->src[0];
+    const ggml_tensor * w_s = shared_down->src[0];
+    const int ncols_x = w->ne[0];
+    const int n_used  = down->ne[1];
+    const int stride_channel_y = GGML_PAD(ncols_x, MATRIX_ROW_PADDING) / QK8_1;
+
+    ctx.q8_1_cache.invalidate(dst);
+    const dim3 grid_dims(w->ne[1], 1, 1);
+    const dim3 block_dims(QK8_1, n_used + 1, 1);
+#define MMVQ_MOE_DOWN_SHARED_CASE(T, TS) \
+    if (w->type == T && w_s->type == TS) { \
+        mul_mat_vec_q_moe_down_shared<T, TS><<<grid_dims, block_dims, 0, ctx.stream()>>>( \
+            w->data, w_s->data, (const block_q8_1 *) y_q8_1, (const block_q8_1 *) y_s_q8_1, scratch, nullptr, \
+            (float *) dst->data, ncols_x, w->nb[1] / ggml_type_size(T), w->nb[2] / ggml_type_size(T), \
+            w_s->nb[1] / ggml_type_size(TS), stride_channel_y, n_used); \
+        return; \
+    }
+    MMVQ_MOE_DOWN_SHARED_CASE(GGML_TYPE_Q5_0,   GGML_TYPE_Q8_0)
+    MMVQ_MOE_DOWN_SHARED_CASE(GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_0)
+    MMVQ_MOE_DOWN_SHARED_CASE(GGML_TYPE_Q8_0,   GGML_TYPE_Q8_0)
+    MMVQ_MOE_DOWN_SHARED_CASE(GGML_TYPE_Q4_0,   GGML_TYPE_Q8_0)
+#undef MMVQ_MOE_DOWN_SHARED_CASE
+    GGML_ABORT("unsupported types for the fused routed + shared expert down stage");
+}

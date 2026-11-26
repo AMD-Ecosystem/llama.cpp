@@ -1384,7 +1384,8 @@ struct ggml_cuda_q8_1_cache {
     void reset(bool enable);
     // node writes its output: drop the copies of tensors it overlaps
     void invalidate(const ggml_tensor * node);
-    // the copy of t, nullptr if there is none
+    // the copy of t, nullptr if there is none; a reshape or view of a cached tensor that MMVQ quantizes to the same
+    // q8_1 blocks shares its copy, see ggml_cuda_q8_1_shares_copy
     const char * find(const ggml_tensor * t) const;
     // the buffer for the next copy (size bytes), nullptr if it cannot be cached; commit() makes it t's copy
     char * reserve(size_t size);
@@ -1411,8 +1412,34 @@ struct ggml_backend_cuda_context {
     ggml_cuda_q8_1_cache q8_1_cache;
 
     // where a flash attention whose result MMVQ reads writes the q8_1 copy, and whether it did
-    block_q8_1 * fa_q8_1         = nullptr;
-    bool         fa_q8_1_written = false;
+    // the q8_1 copy the node being computed may also write for an MMVQ product that reads it (see q8_1_cache)
+    block_q8_1 * out_q8_1         = nullptr;
+    bool         out_q8_1_written = false;
+
+    // the activation whose values the fused MMVQ + SCALE + SILU also wrote into the buffer of the hyper-connection gate
+    // product right after it, for ggml_cuda_mul_mat_vec_q_hc_pre
+    const ggml_tensor * hc_lo_copy = nullptr;
+
+    // the hyper-connection injection product a fused pre-mix computed ahead into hc_inject_buf, for the combine that
+    // reads it (see ggml_cuda_hc_inject_ahead)
+    const ggml_tensor * hc_inject_node = nullptr;
+    float *             hc_inject_buf  = nullptr;
+
+    // the routed experts' down product whose stage the fused routed + shared expert gate/up prepared in moe_scratch:
+    // the shared expert's gate, the routing weights from 1 and the ids from QK8_1 (see ggml_cuda_moe_down_fusion)
+    const ggml_tensor * moe_down_node = nullptr;
+    float *             moe_scratch   = nullptr;
+
+    // the SSM_CONV whose result a fused convolution step already wrote (see ggml_cuda_conv_step_fusion), and the
+    // RMS_NORM + SCALE of its rows it also wrote (see ggml_cuda_conv_step_norms)
+    const ggml_tensor * conv_done_node    = nullptr;
+    const ggml_tensor * conv_norm_done[2] = { nullptr, nullptr };
+
+    // the counter of the fused router + top-k MoE selection, zero between its launches
+    int *               router_topk_counter = nullptr;
+
+    // BF16 copies of F32 MoE router weights by their data, see ggml_cuda_prepare_router_bf16
+    std::unordered_map<const void *, void *> router_bf16;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
