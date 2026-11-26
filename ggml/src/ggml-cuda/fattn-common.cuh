@@ -717,6 +717,23 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
     }
 }
 
+// copy K/V [ne0, ne1, ne2, ne3] with any strides to contiguous, 16 bytes per thread, read in i0, i2, i1, i3 order
+// with rows: dst row i1 is src row rows[i1], zero for rows[i1] < 0
+static __global__ void flash_attn_ext_cont_kv(
+        const char * __restrict__ src, int4 * __restrict__ dst, const int32_t * __restrict__ rows, const int ne0_16, const int64_t ne1, const int ne2, const int64_t n,
+        const size_t nb1, const size_t nb2, const size_t nb3) {
+    const int64_t i = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const int     i0 = i % ne0_16;
+    const int     i2 = (i / ne0_16) % ne2;
+    const int64_t i1 = (i / (ne0_16*ne2)) % ne1;
+    const int64_t i3 = i / (ne0_16*ne2*ne1);
+    const int64_t r1 = rows ? rows[i1] : i1;
+    dst[((i3*ne2 + i2)*ne1 + i1)*ne0_16 + i0] = r1 < 0 ? make_int4(0, 0, 0, 0) : ((const int4 *) (src + i3*nb3 + i2*nb2 + r1*nb1))[i0];
+}
+
 template <int ncols1>
 __launch_bounds__(FATTN_KQ_STRIDE/2, 1)
 static __global__ void flash_attn_mask_to_KV_max(
@@ -769,11 +786,39 @@ static __global__ void flash_attn_mask_to_KV_max(
     // In either case, walk back the decrementation by FATTN_KQ_STRIDE.
     KV_max_sj += FATTN_KQ_STRIDE;
 
+    // KV_min: lower edge of the first tile with non-masked values, e.g. the start of a sliding window
+    int KV_min_sj = 0;
+    for (; KV_min_sj < KV_max_sj - FATTN_KQ_STRIDE; KV_min_sj += FATTN_KQ_STRIDE) {
+        int all_inf = 1;
+
+#pragma unroll
+        for (int j = 0; j < ncols1; ++j) {
+            if (jt*ncols1 + j < n_queries) {
+                const float2 tmp = __half22float2(mask[j*s31 + KV_min_sj/2 + tid]);
+                all_inf = all_inf && int(isinf(tmp.x)) && int(isinf(tmp.y));
+            }
+        }
+
+        all_inf = warp_reduce_all(all_inf);
+        if (tid % WARP_SIZE == 0) {
+            buf_iw[tid / WARP_SIZE] = all_inf;
+        }
+        __syncthreads();
+        all_inf = buf_iw[tid % WARP_SIZE];
+        __syncthreads();
+        all_inf = warp_reduce_all(all_inf);
+
+        if (!all_inf) {
+            break;
+        }
+    }
+
     if (threadIdx.x != 0) {
         return;
     }
 
     KV_max[sequence*ne31 + jt] = KV_max_sj;
+    KV_max[gridDim.y*ne31 + sequence*ne31 + jt] = KV_min_sj;
 }
 
 void ggml_cuda_flash_attn_ext_compact_mask(
@@ -1089,6 +1134,9 @@ void launch_fattn(
     const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
 
+    // declared first: the VMM pool must free in reverse order of allocation
+    ggml_cuda_pool_alloc<half>   K_cont(pool);
+    ggml_cuda_pool_alloc<half>   V_cont(pool);
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
@@ -1167,6 +1215,30 @@ void launch_fattn(
         }
     }
 
+    // AMD: large batches are many times slower if the K/V rows of a head are not contiguous (TLB misses), so copy them first
+    const int32_t * kv_rows_data = kv_rows ? (const int32_t *) kv_rows->data : nullptr;
+    auto cont_kv = [&](const ggml_tensor * t, const char *& data, size_t & nb1, size_t & nb2, size_t & nb3, ggml_cuda_pool_alloc<half> & buf) {
+        const int     ne0_16 = t->ne[0]*sizeof(half)/sizeof(int4);
+        const int64_t n      = int64_t(ne0_16)*n_kv_cols*t->ne[2]*t->ne[3];
+        buf.alloc(t->ne[0]*n_kv_cols*t->ne[2]*t->ne[3]);
+        flash_attn_ext_cont_kv<<<(n + 255)/256, 256, 0, main_stream>>>(data, (int4 *) buf.ptr, kv_rows_data, ne0_16, n_kv_cols, t->ne[2], n, nb1, nb2, nb3);
+        CUDA_CHECK(cudaGetLastError());
+        data = (const char *) buf.ptr;
+        nb1  = t->ne[0]*sizeof(half);
+        nb2  = n_kv_cols*nb1;
+        nb3  = t->ne[2]*nb2;
+    };
+    auto aligned_16 = [](const char * data, size_t nb1, size_t nb2, size_t nb3, int64_t ne0) {
+        return ((uintptr_t) data | nb1 | nb2 | nb3 | ne0*sizeof(half)) % sizeof(int4) == 0;
+    };
+    if (GGML_CUDA_CC_IS_AMD(cc) && K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && !V_is_K_view && (!kv_rows || kv_rows->ne[1] == 1) && !use_sparse &&
+            Q->ne[1] > 512 && (kv_rows || nb11 != K->ne[0]*sizeof(half) || nb21 != V->ne[0]*sizeof(half)) &&
+            aligned_16(K_data, nb11, nb12, nb13, K->ne[0]) && aligned_16(V_data, nb21, nb22, nb23, V->ne[0])) {
+        cont_kv(K, K_data, nb11, nb12, nb13, K_cont);
+        cont_kv(V, V_data, nb21, nb22, nb23, V_cont);
+        kv_rows_data = nullptr;
+    }
+
     const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int gqa_ratio    = Q->ne[2] / K->ne[2];
     const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
@@ -1200,7 +1272,8 @@ void launch_fattn(
         const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
         const int iter_k = n_kv_cols / FATTN_KQ_STRIDE;
 
-        KV_max.alloc(ne_KV_max);
+        // KV_max of all tiles, then KV_min of all tiles
+        KV_max.alloc(2*ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
             (const half2 *) mask->data, KV_max.ptr, iter_k, int(Q->ne[1]), s31, s33);
@@ -1336,7 +1409,7 @@ void launch_fattn(
         mask ? ((const char *) mask->data) : nullptr,
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
-        kv_rows ? (const int *) kv_rows->data : nullptr,
+        kv_rows_data,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
