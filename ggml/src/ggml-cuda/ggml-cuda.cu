@@ -4928,64 +4928,10 @@ static void ggml_cuda_hc_inject_reorder(ggml_cgraph * cgraph) {
     }
 }
 
-// q8_0 10240x320 MUL_MAT whose next computed node is the gated HC_PRE that consumes it.
-// Returns the HC_PRE index, or -1.
-static int ggml_cuda_hc_up_pre_match(const ggml_cgraph * cgraph, int i) {
-    const ggml_tensor * mm = cgraph->nodes[i];
-    if (mm->op != GGML_OP_MUL_MAT) {
-        return -1;
-    }
-    const ggml_tensor * w  = mm->src[0];
-    const ggml_tensor * lo = mm->src[1];
-    if (w->type != GGML_TYPE_Q8_0 || w->ne[0] != 320 || w->ne[1] != 10240 || w->ne[2] != 1 || !ggml_is_contiguous(w)) {
-        return -1;
-    }
-    if (lo->type != GGML_TYPE_F32 || lo->ne[0] != 320 || lo->ne[1] < 32 || lo->ne[2] != 1 || !ggml_is_contiguous(lo)) {
-        return -1;
-    }
-    if (!ggml_node_has_n_uses(cgraph, i, 1)) {
-        return -1;
-    }
-    int pre_i = -1;
-    for (int j = i + 1; j < cgraph->n_nodes && j < i + 6; ++j) {
-        if (ggml_cuda_is_view_or_noop(cgraph->nodes[j])) {
-            continue;
-        }
-        if (cgraph->nodes[j]->op != GGML_OP_DSV4_HC_PRE) {
-            return -1;
-        }
-        pre_i = j;
-        break;
-    }
-    if (pre_i < 0 || ggml_get_op_params_i32(cgraph->nodes[pre_i], 1) == 0) {
-        return -1;
-    }
-    const ggml_tensor * pre  = cgraph->nodes[pre_i];
-    const ggml_tensor * gate = pre->src[1];
-    const ggml_tensor * xn   = pre->src[0];
-    const bool gate_ok = gate == mm || gate->src[0] == mm || gate->view_src == mm;
-    if (!gate_ok || xn->type != GGML_TYPE_F32 || xn->ne[0] != 2560 || xn->ne[1] != 4 || xn->ne[2] != lo->ne[1]) {
-        return -1;
-    }
-    if (xn->nb[0] != sizeof(float) || pre->nb[0] != sizeof(float) || pre->type != GGML_TYPE_F32) {
-        return -1;
-    }
-    return pre_i;
-}
-
 static bool ggml_cuda_hc_inject_on(const ggml_backend_cuda_context * cuda_ctx) {
     static const int sw = ggml_cuda_env_switch("GGML_HIP_HC_INJECT");
     const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
     return ggml_cuda_switch_or_rdna3_5(sw, cc);
-}
-
-static bool ggml_cuda_hc_up_on(const ggml_backend_cuda_context * cuda_ctx) {
-    // The fused q8_0 up + HC_PRE kernel is slower than the two existing kernels on gfx1151
-    // (about 14 ms vs 2.2 ms at n=2048). HC_PRE is already at the DRAM ceiling, so leave this off
-    // unless GGML_HIP_HC_UP=1.
-    static const int sw = ggml_cuda_env_switch("GGML_HIP_HC_UP");
-    GGML_UNUSED(cuda_ctx);
-    return sw == 1;
 }
 
 // try and fuse nodes and return the number of nodes to skip
@@ -5013,17 +4959,6 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 }
                 ggml_cuda_op_rms_norm_hc_inject(*cuda_ctx, cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[mm_i], scale);
                 return inj_last - i;
-            }
-        }
-    }
-
-    if (ggml_cuda_hc_up_on(cuda_ctx)) {
-        const int pre_i = ggml_cuda_hc_up_pre_match(cgraph, i);
-        if (pre_i > i) {
-            const int out_nodes[] = { pre_i };
-            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, pre_i - i + 1, out_nodes, 1)) {
-                ggml_cuda_op_hc_up_pre(*cuda_ctx, cgraph->nodes[i], cgraph->nodes[pre_i]);
-                return pre_i - i;
             }
         }
     }

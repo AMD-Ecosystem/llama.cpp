@@ -5140,33 +5140,6 @@ struct test_hc_inject : public test_case {
     }
 };
 
-// q8_0 up 10240x320 followed by gated DSV4_HC_PRE on the same stream layout.
-struct test_hc_up_pre : public test_case {
-    const int64_t n_tokens;
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "HC_UP_PRE";
-    }
-    std::string vars() override { return VARS_TO_STR1(n_tokens); }
-    explicit test_hc_up_pre(int64_t n_tokens) : n_tokens(n_tokens) {}
-    double max_nmse_err() override { return 5e-4; }
-    uint64_t op_flops(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return 1000ULL * 1000 * 1000 * 1000;
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        const int64_t n_embd = 2560;
-        const int64_t hc     = 4;
-        ggml_tensor * w  = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, 320, n_embd * hc);
-        ggml_tensor * lo = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 320, n_tokens);
-        ggml_tensor * xn = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
-        ggml_tensor * gate = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, w, lo), n_embd, hc, n_tokens);
-        return ggml_dsv4_hc_pre_gated(ctx, xn, gate, 0.25f);
-    }
-};
-
 struct test_dsv4_hc_post : public test_dsv4_hc {
     const int64_t n_embd;
     const int64_t n_tokens;
@@ -11233,9 +11206,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_hc_inject(1));
     test_cases.emplace_back(new test_hc_inject(32));
     test_cases.emplace_back(new test_hc_inject(37, true));
-    test_cases.emplace_back(new test_hc_up_pre(1));
-    test_cases.emplace_back(new test_hc_up_pre(32));
-    test_cases.emplace_back(new test_hc_up_pre(37));
     for (int64_t n_hc : {1, 2, 3, 5, 8, 65}) {
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17));
         test_cases.emplace_back(new test_dsv4_hc_pre(128, n_hc, 17, true));
@@ -14202,7 +14172,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Qwen3.8-Flash-Next gated residual prefill: one ubatch row of the HC chain
     test_cases.emplace_back(new test_dsv4_hc_pre(2560, 4, 2048, true));
     test_cases.emplace_back(new test_hc_inject(2048));
-    test_cases.emplace_back(new test_hc_up_pre(2048));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,   320, 2048, 10240, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,  GGML_TYPE_F32,     4, 2048, 10240, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 10240, 2048,   320, {1, 1}, {1, 1}));
