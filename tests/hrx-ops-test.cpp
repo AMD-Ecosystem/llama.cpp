@@ -10152,6 +10152,7 @@ static constexpr ArchitectureRow64Case kArchitectureRow64Cases[] = {
     { LLM_ARCH_LFM2, true },
     { LLM_ARCH_LFM2MOE, false },
     { LLM_ARCH_MISTRAL3, true },
+    { LLM_ARCH_GEMMA3, true },
     { LLM_ARCH_MELLUM, true },
     { LLM_ARCH_MINICPM3, true },
     { LLM_ARCH_MUSE_GLIMMER, true },
@@ -11204,6 +11205,19 @@ static void register_dense_matmul_cases(Suite & suite) {
             "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32_aligned",
             64, 128, GGML_GLU_OP_GEGLU, 640);
     });
+    suite.device_case("dense_matmul_swiglu.q6_K.row64.geglu.tokens1", [] {
+        run_dense_matmul_swiglu_cpu_reference_case(
+            GGML_TYPE_Q6_K, GGML_TYPE_Q6_K, "loom_libs:ggml_mul_mat_swiglu_f32_f32_lowtoken_dot",
+            1, 192, GGML_GLU_OP_GEGLU, 768, false, true, true, true, 0.0f, true);
+    });
+    for (const ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        suite.device_case("dense_matmul_swiglu." + type_name(type) + ".row64.geglu.tokens66", [type] {
+            const char * kernel = type == GGML_TYPE_Q4_K ? "loom_libs:ggml_mul_mat_tiled_pair_input_f32_binary_publish_f32" :
+                                                          "loom_libs:ggml_mul_mat_q6_k_f32_wmma_prefill_wave32";
+            run_dense_matmul_swiglu_cpu_reference_case(
+                type, type, kernel, 66, 192, GGML_GLU_OP_GEGLU, 768, false, true, true, true, 0.0f, true);
+        });
+    }
     for (const ggml_glu_op op : { GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU_ERF, GGML_GLU_OP_GEGLU_QUICK }) {
         suite.device_case(std::string("dense_matmul_swiglu.q4_k.f16.") + glu_op_name(op) + ".tokens2.outputs128", [op] {
             run_dense_matmul_swiglu_cpu_reference_case(
